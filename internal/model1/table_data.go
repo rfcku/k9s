@@ -167,19 +167,22 @@ func (t *TableData) rxFilter(q string, inverse bool) (*RowEvents, error) {
 		return nil, fmt.Errorf("invalid rx filter %q: %w", q, err)
 	}
 
-	ageIndex, ok := t.header.IndexOf("AGE", true)
-
+	var startIndex int
+	if _, ok := t.header.IndexOf("NAMESPACE", true); ok && client.IsNamespaced(t.namespace) {
+		startIndex = 1
+	}
 	rr := NewRowEvents(t.RowCount() / 2)
+	ageIndex, _ := t.header.IndexOf("AGE", true)
 	t.rowEvents.Range(func(_ int, re RowEvent) bool {
-		ff := re.Row.Fields
-		if ok && ageIndex+1 <= len(ff) {
+		ff := re.Row.Fields[startIndex:]
+		if ageIndex >= 0 && ageIndex+1 <= len(ff) {
 			ff = append(ff[0:ageIndex], ff[ageIndex+1:]...)
 		}
-		fields := strings.Join(ff, spacer)
-		if (inverse && !rx.MatchString(fields)) ||
-			((!inverse) && rx.MatchString(fields)) {
+		match := rx.MatchString(strings.Join(ff, spacer))
+		if (inverse && !match) || (!inverse && match) {
 			rr.Add(re)
 		}
+
 		return true
 	})
 
@@ -209,12 +212,11 @@ func (t *TableData) fuzzyFilter(q string) *RowEvents {
 }
 
 func (t *TableData) filterToast() *RowEvents {
+	rr := NewRowEvents(10)
 	idx, ok := t.header.IndexOf("VALID", true)
 	if !ok {
-		return nil
+		return rr
 	}
-
-	rr := NewRowEvents(10)
 	t.rowEvents.Range(func(_ int, re RowEvent) bool {
 		if re.Row.Fields[idx] != "" {
 			rr.Add(re)
