@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/derailed/k9s/internal/render"
-	"github.com/derailed/popeye/pkg/config"
 )
 
 // Section represents an xray renderer.
@@ -26,7 +25,7 @@ func (s *Section) Render(ctx context.Context, ns string, o interface{}) error {
 	root := NewTreeNode(section.GVR, section.Title)
 	parent, ok := ctx.Value(KeyParent).(*TreeNode)
 	if !ok {
-		return fmt.Errorf("Expecting a TreeNode but got %T", ctx.Value(KeyParent))
+		return fmt.Errorf("expecting a TreeNode but got %T", ctx.Value(KeyParent))
 	}
 	s.outcomeRefs(root, section)
 	parent.Add(root)
@@ -59,23 +58,23 @@ func (*Section) outcomeRefs(parent *TreeNode, section render.Section) {
 // ----------------------------------------------------------------------------
 // Helpers...
 
-func colorize(s string, l config.Level) string {
+func colorize(s string, l render.Level) string {
 	c := "green"
 	// nolint:exhaustive
 	switch l {
-	case config.ErrorLevel:
+	case render.ErrorLevel:
 		c = "red"
-	case config.WarnLevel:
+	case render.WarnLevel:
 		c = "orange"
-	case config.InfoLevel:
+	case render.InfoLevel:
 		c = "blue"
 	}
 	return fmt.Sprintf("[%s::]%s", c, s)
 }
 
 func cleanse(s string) string {
-	s = strings.Replace(s, "[", "(", -1)
-	s = strings.Replace(s, "]", ")", -1)
-	s = strings.Replace(s, "/", "::", -1)
+	s = strings.ReplaceAll(s, "[", "(")
+	s = strings.ReplaceAll(s, "]", ")")
+	s = strings.ReplaceAll(s, "/", "::")
 	return s
 }

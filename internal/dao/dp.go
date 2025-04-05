@@ -7,10 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/render"
-	"github.com/rs/zerolog/log"
+	"github.com/derailed/k9s/internal/slogs"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -215,7 +216,10 @@ func (d *Deployment) Scan(ctx context.Context, gvr client.GVR, fqn string, wait 
 		case SecGVR:
 			found, err := hasSecret(d.Factory, &dp.Spec.Template.Spec, dp.Namespace, n, wait)
 			if err != nil {
-				log.Warn().Err(err).Msgf("scanning secret %q", fqn)
+				slog.Warn("Fail to locate secret",
+					slogs.FQN, fqn,
+					slogs.Error, err,
+				)
 				continue
 			}
 			if !found {
@@ -317,8 +321,8 @@ func hasConfigMap(spec *v1.PodSpec, name string) bool {
 	}
 
 	for _, v := range spec.Volumes {
-		if cm := v.VolumeSource.ConfigMap; cm != nil {
-			if cm.LocalObjectReference.Name == name {
+		if cm := v.ConfigMap; cm != nil {
+			if cm.Name == name {
 				return true
 			}
 		}
@@ -371,7 +375,7 @@ func hasSecret(f Factory, spec *v1.PodSpec, ns, name string, wait bool) (bool, e
 	}
 
 	for _, v := range spec.Volumes {
-		if sec := v.VolumeSource.Secret; sec != nil {
+		if sec := v.Secret; sec != nil {
 			if sec.SecretName == name {
 				return true, nil
 			}

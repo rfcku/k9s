@@ -79,6 +79,9 @@ type Accessor interface {
 
 	// GVR returns a gvr a string.
 	GVR() string
+
+	// SetIncludeObject toggles object inclusion.
+	SetIncludeObject(bool)
 }
 
 // DrainOptions tracks drain attributes.
@@ -119,6 +122,12 @@ type Describer interface {
 type Scalable interface {
 	// Scale scales a resource up or down.
 	Scale(ctx context.Context, path string, replicas int32) error
+}
+
+// ReplicasGetter represents a resource with replicas.
+type ReplicasGetter interface {
+	// Replicas returns the number of replicas for the resource located at the given path.
+	Replicas(ctx context.Context, path string) (int32, error)
 }
 
 // Controller represents a pod controller.

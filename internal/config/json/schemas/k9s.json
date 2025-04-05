@@ -15,6 +15,7 @@
         "noExitOnCtrlC": { "type": "boolean" },
         "skipLatestRevCheck": { "type": "boolean" },
         "disablePodCounting": { "type": "boolean" },
+        "portForwardAddress": { "type": "string" },
         "ui": {
           "type": "object",
           "additionalProperties": false,
@@ -23,10 +24,12 @@
             "headless": {"type": "boolean"},
             "logoless": {"type": "boolean"},
             "crumbsless": {"type": "boolean"},
+            "splashless": {"type": "boolean"},
             "noIcons": {"type": "boolean"},
             "reactive": {"type": "boolean"},
             "skin": {"type": "string"},
-            "defaultsToFullScreen": {"type": "boolean"}
+            "defaultsToFullScreen": {"type": "boolean"},
+            "useFullGVRTitle": {"type": "boolean"}
           }
         },
         "shellPod": {
@@ -103,6 +106,7 @@
             "buffer": {"type": "integer"},
             "sinceSeconds": {"type": "integer"},
             "textWrap": {"type": "boolean"},
+            "disableAutoscroll": {"type": "boolean"},
             "showTime": {"type": "boolean"}
           }
         },

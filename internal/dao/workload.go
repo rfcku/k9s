@@ -8,13 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/render"
-	"github.com/rs/zerolog/log"
+	"github.com/derailed/k9s/internal/slogs"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -81,7 +82,7 @@ func (w *Workload) Delete(ctx context.Context, path string, propagation *metav1.
 }
 
 func (a *Workload) fetch(ctx context.Context, gvr client.GVR, ns string) (*metav1.Table, error) {
-	a.Table.gvr = gvr
+	a.gvr = gvr
 	oo, err := a.Table.List(ctx, ns)
 	if err != nil {
 		return nil, err
@@ -112,14 +113,12 @@ func (a *Workload) List(ctx context.Context, ns string) ([]runtime.Object, error
 		for _, r := range table.Rows {
 			if obj := r.Object.Object; obj != nil {
 				if m, err := meta.Accessor(obj); err == nil {
-					ns = m.GetNamespace()
-					ts = m.GetCreationTimestamp()
+					ns, ts = m.GetNamespace(), m.GetCreationTimestamp()
 				}
 			} else {
 				var m metav1.PartialObjectMetadata
 				if err := json.Unmarshal(r.Object.Raw, &m); err == nil {
-					ns = m.GetNamespace()
-					ts = m.CreationTimestamp
+					ns, ts = m.GetNamespace(), m.CreationTimestamp
 				}
 			}
 			stat := status(gvr, r, table.ColumnDefinitions)
@@ -206,12 +205,18 @@ func isReady(s string) bool {
 	}
 	r, err := strconv.Atoi(tt[0])
 	if err != nil {
-		log.Error().Msgf("invalid ready count: %q", tt[0])
+		slog.Error("Invalid ready count",
+			slogs.Error, err,
+			slogs.Count, tt[0],
+		)
 		return false
 	}
 	c, err := strconv.Atoi(tt[1])
 	if err != nil {
-		log.Error().Msgf("invalid expected count: %q", tt[1])
+		slog.Error("invalid expected count: %q",
+			slogs.Error, err,
+			slogs.Count, tt[1],
+		)
 		return false
 	}
 

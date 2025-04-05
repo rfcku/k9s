@@ -7,10 +7,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/rs/zerolog/log"
+	"github.com/derailed/k9s/internal/slogs"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -19,13 +20,15 @@ import (
 )
 
 const (
-	defaultServiceAccount      = "default"
-	defaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
+	defaultServiceAccount = "default"
+
+	// DefaultContainerAnnotation represents the annotation key for the default container.
+	DefaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
 )
 
 // GetDefaultContainer returns a container name if specified in an annotation.
 func GetDefaultContainer(m metav1.ObjectMeta, spec v1.PodSpec) (string, bool) {
-	defaultContainer, ok := m.Annotations[defaultContainerAnnotation]
+	defaultContainer, ok := m.Annotations[DefaultContainerAnnotation]
 	if !ok {
 		return "", false
 	}
@@ -35,7 +38,10 @@ func GetDefaultContainer(m metav1.ObjectMeta, spec v1.PodSpec) (string, bool) {
 			return defaultContainer, true
 		}
 	}
-	log.Warn().Msg(defaultContainer + " container  not found. " + defaultContainerAnnotation + " annotation will be ignored")
+	slog.Warn("Container not found. Annotation ignored",
+		slogs.CO, defaultContainer,
+		slogs.Annotation, DefaultContainerAnnotation,
+	)
 
 	return "", false
 }
@@ -43,7 +49,7 @@ func GetDefaultContainer(m metav1.ObjectMeta, spec v1.PodSpec) (string, bool) {
 func extractFQN(o runtime.Object) string {
 	u, ok := o.(*unstructured.Unstructured)
 	if !ok {
-		log.Error().Err(fmt.Errorf("expecting unstructured but got %T", o))
+		slog.Error("Expecting unstructured", slogs.ResType, fmt.Sprintf("%T", o))
 		return client.NA
 	}
 
@@ -93,7 +99,7 @@ func ToYAML(o runtime.Object, showManaged bool) (string, error) {
 	}
 	err := p.PrintObj(o, &buff)
 	if err != nil {
-		log.Error().Msgf("Marshal Error %v", err)
+		slog.Error("Marshal failed", slogs.Error, err)
 		return "", err
 	}
 

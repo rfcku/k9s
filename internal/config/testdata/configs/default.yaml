@@ -5,14 +5,17 @@ k9s:
   maxConnRetry: 5
   readOnly: false
   noExitOnCtrlC: false
+  portForwardAddress: localhost
   ui:
     enableMouse: false
     headless: false
     logoless: false
     crumbsless: false
+    splashless: false
     reactive: false
     noIcons: false
     defaultsToFullScreen: false
+    useFullGVRTitle: false
   skipLatestRevCheck: false
   disablePodCounting: false
   shellPod:
@@ -31,6 +34,7 @@ k9s:
     buffer: 5000
     sinceSeconds: -1
     textWrap: false
+    disableAutoscroll: false
     showTime: false
   thresholds:
     cpu:

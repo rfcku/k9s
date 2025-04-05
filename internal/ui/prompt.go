@@ -104,8 +104,6 @@ func NewPrompt(app *App, noIcons bool, styles *config.Styles) *Prompt {
 	p.SetDynamicColors(true)
 	p.SetBorder(true)
 	p.SetBorderPadding(0, 0, 1, 1)
-	p.SetBackgroundColor(styles.K9s.Prompt.BgColor.Color())
-	p.SetTextColor(styles.K9s.Prompt.FgColor.Color())
 	styles.AddListener(&p)
 	p.SetInputCapture(p.keyboard)
 
@@ -236,7 +234,8 @@ func (p *Prompt) write(text, suggest string) {
 	if suggest != "" {
 		txt += fmt.Sprintf("[%s::-]%s", p.styles.Prompt().SuggestColor, suggest)
 	}
-	fmt.Fprintf(p, defaultPrompt, p.icon, txt)
+	p.StylesChanged(p.styles)
+	_, _ = fmt.Fprintf(p, defaultPrompt, p.icon, txt)
 }
 
 // ----------------------------------------------------------------------------

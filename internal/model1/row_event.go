@@ -5,6 +5,7 @@ package model1
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 )
 
@@ -272,6 +273,14 @@ func (r *RowEvents) Sort(ns string, sortCol int, isDuration, numCol, isCapacity,
 	r.reindex()
 }
 
+// For debugging...
+func (re RowEvents) Dump(msg string) {
+	slog.Debug("[DEBUG] RowEvents" + msg)
+	for _, r := range re.events {
+		slog.Debug(fmt.Sprintf("   %#v", r))
+	}
+}
+
 // ----------------------------------------------------------------------------
 
 // RowEventSorter sorts row events by a given colon.
@@ -290,7 +299,6 @@ func (r RowEventSorter) Len() int {
 }
 
 func (r RowEventSorter) Swap(i, j int) {
-
 	r.Events.events[i], r.Events.events[j] = r.Events.events[j], r.Events.events[i]
 }
 

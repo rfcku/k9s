@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/model1"
@@ -14,7 +15,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// Namespaceable represents a namespaceable model.
+const (
+	unlockedIC = "🖍"
+	lockedIC   = "🔑"
+)
+
+// Namespaceable tracks namespaces.
 type Namespaceable interface {
 	// ClusterWide returns true if the model represents resource in all namespaces.
 	ClusterWide() bool
@@ -29,7 +35,7 @@ type Namespaceable interface {
 	InNamespace(string) bool
 }
 
-// Lister represents a viewable resource.
+// Lister tracks resource getter.
 type Lister interface {
 	// Get returns a resource instance.
 	Get(ctx context.Context, path string) (runtime.Object, error)
@@ -75,4 +81,7 @@ type Tabular interface {
 
 	// Delete a resource.
 	Delete(context.Context, string, *metav1.DeletionPropagation, dao.Grace) error
+
+	// SetViewSetting injects custom cols specification.
+	SetViewSetting(context.Context, *config.ViewSetting)
 }

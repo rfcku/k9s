@@ -8,7 +8,6 @@ import (
 	"io"
 	"strings"
 
-	grypeDB "github.com/anchore/grype/grype/db/v5"
 	"github.com/anchore/grype/grype/match"
 	"github.com/anchore/grype/grype/vulnerability"
 )
@@ -24,9 +23,9 @@ type Scans map[string]*Scan
 // Dump dump reports to stdout.
 func (s Scans) Dump(w io.Writer) {
 	for k, v := range s {
-		fmt.Fprintf(w, "Image: %s -- ", k)
+		_, _ = fmt.Fprintf(w, "Image: %s -- ", k)
 		v.Tally.Dump(w)
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 		v.Dump(w)
 	}
 }
@@ -49,7 +48,7 @@ func (s *Scan) Dump(w io.Writer) {
 
 func (s *Scan) run(mm *match.Matches, store vulnerability.MetadataProvider) error {
 	for m := range mm.Enumerate() {
-		meta, err := store.GetMetadata(m.Vulnerability.ID, m.Vulnerability.Namespace)
+		meta, err := store.VulnerabilityMetadata(vulnerability.Reference{ID: m.Vulnerability.ID, Namespace: m.Vulnerability.Namespace})
 		if err != nil {
 			return err
 		}
@@ -59,9 +58,9 @@ func (s *Scan) run(mm *match.Matches, store vulnerability.MetadataProvider) erro
 		}
 		fixVersion := strings.Join(m.Vulnerability.Fix.Versions, ", ")
 		switch m.Vulnerability.Fix.State {
-		case grypeDB.WontFixState:
+		case vulnerability.FixStateWontFix:
 			fixVersion = wontFix
-		case grypeDB.UnknownFixState:
+		case vulnerability.FixStateUnknown:
 			fixVersion = naValue
 		}
 		s.Table.addRow(newRow(m.Package.Name, m.Package.Version, fixVersion, string(m.Package.Type), m.Vulnerability.ID, severity))

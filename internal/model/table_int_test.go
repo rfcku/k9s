@@ -81,11 +81,6 @@ func TestTableMeta(t *testing.T) {
 			accessor: &dao.Node{},
 			renderer: &render.Node{},
 		},
-		"table": {
-			gvr:      "v1/events",
-			accessor: &dao.Table{},
-			renderer: &render.Event{},
-		},
 	}
 
 	for k := range uu {
@@ -172,6 +167,8 @@ type accessor struct {
 }
 
 var _ dao.Accessor = (*accessor)(nil)
+
+func (a *accessor) SetIncludeObject(bool) {}
 
 func (a *accessor) List(ctx context.Context, ns string) ([]runtime.Object, error) {
 	return []runtime.Object{&render.PodWithMetrics{Raw: mustLoad("p1")}}, nil

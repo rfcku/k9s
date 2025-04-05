@@ -6,12 +6,13 @@ package xray
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/render"
-	"github.com/rs/zerolog/log"
+	"github.com/derailed/k9s/internal/slogs"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 )
@@ -34,7 +35,7 @@ func (c *Container) Render(ctx context.Context, ns string, o interface{}) error 
 	root := NewTreeNode("containers", client.FQN(ns, co.Container.Name))
 	parent, ok := ctx.Value(KeyParent).(*TreeNode)
 	if !ok {
-		return fmt.Errorf("Expecting a TreeNode but got %T", ctx.Value(KeyParent))
+		return fmt.Errorf("expecting a TreeNode but got %T", ctx.Value(KeyParent))
 	}
 	pns, _ := client.Namespaced(parent.ID)
 	c.envRefs(f, root, pns, co.Container)
@@ -68,7 +69,7 @@ func (c *Container) secretRefs(f dao.Factory, parent *TreeNode, ns string, ref *
 	if ref == nil {
 		return
 	}
-	gvr, id := "v1/secrets", client.FQN(ns, ref.LocalObjectReference.Name)
+	gvr, id := "v1/secrets", client.FQN(ns, ref.Name)
 	addRef(f, parent, gvr, id, ref.Optional)
 }
 
@@ -76,7 +77,7 @@ func (c *Container) configMapRefs(f dao.Factory, parent *TreeNode, ns string, re
 	if ref == nil {
 		return
 	}
-	gvr, id := "v1/configmaps", client.FQN(ns, ref.LocalObjectReference.Name)
+	gvr, id := "v1/configmaps", client.FQN(ns, ref.Name)
 	addRef(f, parent, gvr, id, ref.Optional)
 }
 
@@ -95,7 +96,10 @@ func validate(f dao.Factory, n *TreeNode, optional *bool) {
 	res, err := f.Get(n.GVR, n.ID, true, labels.Everything())
 	if err != nil || res == nil {
 		if optional == nil || !*optional {
-			log.Warn().Err(err).Msgf("Missing ref %q::%q", n.GVR, n.ID)
+			slog.Warn("Missing ref",
+				slogs.GVR, n.GVR,
+				slogs.ID, n.ID,
+			)
 			n.Extras[StatusKey] = MissingRefStatus
 		}
 		return

@@ -12,6 +12,7 @@ import (
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/ui"
+	"github.com/derailed/k9s/internal/view/cmd"
 	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
 	"github.com/sahilm/fuzzy"
@@ -58,6 +59,7 @@ func NewDetails(app *App, title, subject, contentType string, searchable bool) *
 	return &d
 }
 
+func (d *Details) SetCommand(*cmd.Interpreter)      {}
 func (d *Details) SetFilter(string)                 {}
 func (d *Details) SetLabelFilter(map[string]string) {}
 
@@ -236,11 +238,11 @@ func (d *Details) toggleFullScreenCmd(evt *tcell.EventKey) *tcell.EventKey {
 func (d *Details) setFullScreen(isFullScreen bool) {
 	d.fullScreen = isFullScreen
 	d.SetFullScreen(isFullScreen)
-	d.Box.SetBorder(!isFullScreen)
+	d.SetBorder(!isFullScreen)
 	if isFullScreen {
-		d.Box.SetBorderPadding(0, 0, 0, 0)
+		d.SetBorderPadding(0, 0, 0, 0)
 	} else {
-		d.Box.SetBorderPadding(0, 0, 1, 1)
+		d.SetBorderPadding(0, 0, 1, 1)
 	}
 }
 
