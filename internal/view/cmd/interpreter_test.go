@@ -4,6 +4,7 @@
 package cmd_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/derailed/k9s/internal/view/cmd"
@@ -52,15 +53,43 @@ func TestNsCmd(t *testing.T) {
 		ns  string
 	}{
 		"empty": {},
+
 		"happy": {
 			cmd: "pod fred",
 			ok:  true,
 			ns:  "fred",
 		},
+
 		"ns-arg-spaced": {
 			cmd: "pod      fred   ",
 			ok:  true,
 			ns:  "fred",
+		},
+
+		"caps-no-ns": {
+			cmd: "Deploy",
+		},
+
+		"caps-with-ns": {
+			cmd: "DEPLOY Fred",
+			ok:  true,
+			ns:  "fred",
+		},
+
+		"no-ns": {
+			cmd: "pod",
+		},
+
+		"full-ns": {
+			cmd: "pod app=blee fred @zorg",
+			ok:  true,
+			ns:  "fred",
+		},
+
+		"full-repeat-ns": {
+			cmd: "pod app=blee blee @zorg",
+			ok:  true,
+			ns:  "blee",
 		},
 	}
 
@@ -77,6 +106,98 @@ func TestNsCmd(t *testing.T) {
 	}
 }
 
+func TestSwitchNS(t *testing.T) {
+	uu := map[string]struct {
+		cmd string
+		ns  string
+		e   string
+	}{
+		"empty": {},
+
+		"blank": {
+			cmd: "pod fred",
+			e:   "pod",
+		},
+
+		"no-op": {
+			cmd: "pod fred",
+			ns:  "fred",
+			e:   "pod fred",
+		},
+
+		"no-ns": {
+			cmd: "pod",
+			ns:  "blee",
+			e:   "pod blee",
+		},
+
+		"full-ns": {
+			cmd: "pod app=blee fred @zorg",
+			ns:  "blee",
+			e:   "pod app=blee blee @zorg",
+		},
+
+		"full--repeat-ns": {
+			cmd: "pod app=zorg zorg @zorg",
+			ns:  "blee",
+			e:   "pod app=zorg blee @zorg",
+		},
+
+		"full-no-ns": {
+			cmd: "pod app=blee @zorg",
+			ns:  "blee",
+			e:   "pod app=blee @zorg blee",
+		},
+	}
+
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			p := cmd.NewInterpreter(u.cmd)
+			p.SwitchNS(u.ns)
+			assert.Equal(t, u.e, p.GetLine())
+		})
+	}
+}
+
+func TestClearNS(t *testing.T) {
+	uu := map[string]struct {
+		cmd string
+		e   string
+	}{
+		"empty": {},
+
+		"has-ns": {
+			cmd: "pod fred",
+			e:   "pod",
+		},
+
+		"no-ns": {
+			cmd: "pod",
+			e:   "pod",
+		},
+
+		"full-repeat-ns": {
+			cmd: "pod app=blee @zorg zorg",
+			e:   "pod app=blee @zorg",
+		},
+
+		"full-no-ns": {
+			cmd: "pod app=blee @zorg",
+			e:   "pod app=blee @zorg",
+		},
+	}
+
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			p := cmd.NewInterpreter(u.cmd)
+			p.ClearNS()
+			assert.Equal(t, u.e, p.GetLine())
+		})
+	}
+}
+
 func TestFilterCmd(t *testing.T) {
 	uu := map[string]struct {
 		cmd    string
@@ -84,30 +205,41 @@ func TestFilterCmd(t *testing.T) {
 		filter string
 	}{
 		"empty": {},
+
 		"normal": {
 			cmd:    "pod /fred",
 			ok:     true,
 			filter: "fred",
 		},
+
 		"caps": {
 			cmd:    "POD /FRED",
 			ok:     true,
 			filter: "fred",
 		},
+
 		"filter+ns": {
 			cmd:    "pod /fred ns1",
 			ok:     true,
 			filter: "fred",
 		},
+
 		"ns+filter": {
 			cmd:    "pod ns1 /fred",
 			ok:     true,
 			filter: "fred",
 		},
+
 		"ns+filter+labels": {
 			cmd:    "pod ns1 /fred app=blee,fred=zorg",
 			ok:     true,
 			filter: "fred",
+		},
+
+		"filtered": {
+			cmd:    "pod /cilium kube-system",
+			ok:     true,
+			filter: "cilium",
 		},
 	}
 
@@ -127,34 +259,48 @@ func TestFilterCmd(t *testing.T) {
 func TestLabelCmd(t *testing.T) {
 	uu := map[string]struct {
 		cmd    string
-		ok     bool
-		labels map[string]string
+		err    error
+		labels string
 	}{
 		"empty": {},
+
 		"plain": {
 			cmd:    "pod fred=blee",
-			ok:     true,
-			labels: map[string]string{"fred": "blee"},
+			labels: "fred=blee",
 		},
+
 		"multi": {
 			cmd:    "pod fred=blee,zorg=duh",
-			ok:     true,
-			labels: map[string]string{"fred": "blee", "zorg": "duh"},
+			labels: "fred=blee,zorg=duh",
 		},
+
+		"complex-lbls": {
+			cmd:    "pod 'fred in (blee,zorg),blee notin (zorg)'",
+			labels: "blee notin (zorg),fred in (blee,zorg)",
+		},
+
+		"no-lbls": {
+			cmd: "pod ns-1",
+		},
+
 		"multi-ns": {
 			cmd:    "pod fred=blee,zorg=duh ns1",
-			ok:     true,
-			labels: map[string]string{"fred": "blee", "zorg": "duh"},
+			labels: "fred=blee,zorg=duh",
 		},
+
 		"l-arg-spaced": {
 			cmd:    "pod   fred=blee   ",
-			ok:     true,
-			labels: map[string]string{"fred": "blee"},
+			labels: "fred=blee",
 		},
+
 		"l-arg-caps": {
 			cmd:    "POD  FRED=BLEE   ",
-			ok:     true,
-			labels: map[string]string{"fred": "blee"},
+			labels: "fred=blee",
+		},
+
+		"toast-labels": {
+			cmd: "pod =blee",
+			err: errors.New("found '=', expected: !, identifier, or 'end of string'"),
 		},
 	}
 
@@ -162,10 +308,10 @@ func TestLabelCmd(t *testing.T) {
 		u := uu[k]
 		t.Run(k, func(t *testing.T) {
 			p := cmd.NewInterpreter(u.cmd)
-			ll, ok := p.LabelsArg()
-			assert.Equal(t, u.ok, ok)
-			if u.ok {
-				assert.Equal(t, u.labels, ll)
+			ll, err := p.LabelsSelector()
+			assert.Equal(t, u.err, err)
+			if err == nil {
+				assert.Equal(t, u.labels, ll.String())
 			}
 		})
 	}
@@ -324,23 +470,33 @@ func TestContextCmd(t *testing.T) {
 		ctx string
 	}{
 		"empty": {},
+
 		"happy-full": {
 			cmd: "context ctx1",
 			ok:  true,
 			ctx: "ctx1",
 		},
+
 		"happy-alias": {
 			cmd: "ctx ctx1",
 			ok:  true,
 			ctx: "ctx1",
 		},
+
 		"toast": {
 			cmd: "ctxto ctx1",
 		},
+
 		"caps": {
 			cmd: "ctx Dev",
 			ok:  true,
 			ctx: "Dev",
+		},
+
+		"contains-key": {
+			cmd: "ctx kind-fred",
+			ok:  true,
+			ctx: "kind-fred",
 		},
 	}
 
@@ -472,6 +628,80 @@ func TestCowCmd(t *testing.T) {
 		t.Run(k, func(t *testing.T) {
 			p := cmd.NewInterpreter(u.cmd)
 			assert.Equal(t, u.ok, p.IsCowCmd())
+		})
+	}
+}
+
+func TestArgs(t *testing.T) {
+	uu := map[string]struct {
+		cmd string
+		ok  bool
+		ctx string
+	}{
+		"empty": {},
+
+		"with-plain-context": {
+			cmd: "po @fred",
+			ok:  true,
+			ctx: "fred",
+		},
+	}
+
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			p := cmd.NewInterpreter(u.cmd)
+			ctx, ok := p.ContextArg()
+			assert.Equal(t, u.ok, ok)
+			if u.ok {
+				assert.Equal(t, u.ctx, ctx)
+			}
+		})
+	}
+}
+
+func Test_grokLabels(t *testing.T) {
+	uu := map[string]struct {
+		cmd  string
+		err  error
+		lbls string
+	}{
+		"empty": {},
+
+		"no-labels": {
+			cmd: "po @fred",
+		},
+
+		"plain-label": {
+			cmd:  "po a=b,b=c @fred",
+			lbls: "a=b,b=c",
+		},
+
+		"label-quotes": {
+			cmd:  "po 'a=b,b=c' @fred",
+			lbls: "a=b,b=c",
+		},
+
+		"partial-quotes-label": {
+			cmd:  "po 'a=b @fred",
+			lbls: "",
+		},
+
+		"complex": {
+			cmd:  "po 'a in (b,c),b notin (c,z)' fred'",
+			lbls: "a in (b,c),b notin (c,z)",
+		},
+	}
+
+	for k := range uu {
+		u := uu[k]
+		t.Run(k, func(t *testing.T) {
+			p := cmd.NewInterpreter(u.cmd)
+			sel, err := p.LabelsSelector()
+			assert.Equal(t, u.err, err)
+			if err == nil {
+				assert.Equal(t, u.lbls, sel.String())
+			}
 		})
 	}
 }

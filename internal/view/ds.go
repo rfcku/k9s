@@ -18,7 +18,7 @@ type DaemonSet struct {
 }
 
 // NewDaemonSet returns a new viewer.
-func NewDaemonSet(gvr client.GVR) ResourceViewer {
+func NewDaemonSet(gvr *client.GVR) ResourceViewer {
 	var d DaemonSet
 	d.ResourceViewer = NewPortForwardExtender(
 		NewVulnerabilityExtender(
@@ -31,23 +31,12 @@ func NewDaemonSet(gvr client.GVR) ResourceViewer {
 			),
 		),
 	)
-	d.AddBindKeysFn(d.bindKeys)
 	d.GetTable().SetEnterFn(d.showPods)
 
 	return &d
 }
 
-func (d *DaemonSet) bindKeys(aa *ui.KeyActions) {
-	aa.Bulk(ui.KeyMap{
-		ui.KeyShiftD: ui.NewKeyAction("Sort Desired", d.GetTable().SortColCmd("DESIRED", true), false),
-		ui.KeyShiftC: ui.NewKeyAction("Sort Current", d.GetTable().SortColCmd("CURRENT", true), false),
-		ui.KeyShiftR: ui.NewKeyAction("Sort Ready", d.GetTable().SortColCmd(readyCol, true), false),
-		ui.KeyShiftU: ui.NewKeyAction("Sort UpToDate", d.GetTable().SortColCmd(uptodateCol, true), false),
-		ui.KeyShiftL: ui.NewKeyAction("Sort Available", d.GetTable().SortColCmd(availCol, true), false),
-	})
-}
-
-func (d *DaemonSet) showPods(app *App, model ui.Tabular, _ client.GVR, path string) {
+func (d *DaemonSet) showPods(app *App, _ ui.Tabular, _ *client.GVR, path string) {
 	var res dao.DaemonSet
 	res.Init(app.factory, d.GVR())
 
@@ -70,12 +59,12 @@ func (d *DaemonSet) logOptions(prev bool) (*dao.LogOptions, error) {
 		return nil, err
 	}
 
-	return podLogOptions(d.App(), path, prev, ds.ObjectMeta, ds.Spec.Template.Spec), nil
+	return podLogOptions(d.App(), path, prev, &ds.ObjectMeta, &ds.Spec.Template.Spec), nil
 }
 
 func (d *DaemonSet) getInstance(fqn string) (*appsv1.DaemonSet, error) {
 	var ds dao.DaemonSet
-	ds.Init(d.App().factory, client.NewGVR("apps/v1/daemonsets"))
+	ds.Init(d.App().factory, client.DsGVR)
 
 	return ds.GetInstance(fqn)
 }

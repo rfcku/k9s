@@ -57,7 +57,7 @@ func init() {
 		fmt.Printf("Fail to init k9s logs location %s\n", err)
 	}
 
-	rootCmd.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
+	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return flagError{err: err}
 	})
 
@@ -69,13 +69,11 @@ func init() {
 // Execute root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		if !errors.As(err, &flagError{}) {
-			panic(err)
-		}
+		os.Exit(1)
 	}
 }
 
-func run(cmd *cobra.Command, args []string) error {
+func run(*cobra.Command, []string) error {
 	if err := config.InitLocs(); err != nil {
 		return err
 	}
@@ -104,7 +102,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	slog.SetDefault(slog.New(tint.NewHandler(logFile, &tint.Options{
 		Level:      parseLevel(*k9sFlags.LogLevel),
-		TimeFormat: time.Kitchen,
+		TimeFormat: time.RFC3339,
 	})))
 
 	cfg, err := loadConfiguration()
@@ -112,7 +110,11 @@ func run(cmd *cobra.Command, args []string) error {
 		slog.Warn("Fail to load global/context configuration", slogs.Error, err)
 	}
 	app := view.NewApp(cfg)
-	if err := app.Init(version, *k9sFlags.RefreshRate); err != nil {
+	if app.Config.K9s.DefaultView != "" {
+		app.Config.SetActiveView(app.Config.K9s.DefaultView)
+	}
+
+	if err := app.Init(version, int(*k9sFlags.RefreshRate)); err != nil {
 		return err
 	}
 	if err := app.Run(); err != nil {
@@ -181,11 +183,11 @@ func parseLevel(level string) slog.Level {
 
 func initK9sFlags() {
 	k9sFlags = config.NewFlags()
-	rootCmd.Flags().IntVarP(
+	rootCmd.Flags().Float32VarP(
 		k9sFlags.RefreshRate,
 		"refresh", "r",
 		config.DefaultRefreshRate,
-		"Specify the default refresh rate as an integer (sec)",
+		"Specify the default refresh rate as a float (sec)",
 	)
 	rootCmd.Flags().StringVarP(
 		k9sFlags.LogLevel,
@@ -222,6 +224,12 @@ func initK9sFlags() {
 		"splashless",
 		false,
 		"Turn K9s splash screen off",
+	)
+	rootCmd.Flags().BoolVar(
+		k9sFlags.Invert,
+		"invert",
+		false,
+		"Invert skin (dark to light, light to dark), preserving colors",
 	)
 	rootCmd.Flags().BoolVarP(
 		k9sFlags.AllNamespaces,
@@ -269,7 +277,7 @@ func initK8sFlags() {
 	rootCmd.Flags().StringVar(
 		k8sFlags.Timeout,
 		"request-timeout",
-		"5s",
+		"",
 		"The length of time to wait before giving up on a single server request",
 	)
 
@@ -378,7 +386,7 @@ func initK8sFlagCompletion() {
 		return cfg.AuthInfos
 	}))
 
-	_ = rootCmd.RegisterFlagCompletionFunc("namespace", func(cmd *cobra.Command, args []string, s string) ([]string, cobra.ShellCompDirective) {
+	_ = rootCmd.RegisterFlagCompletionFunc("namespace", func(_ *cobra.Command, _ []string, s string) ([]string, cobra.ShellCompDirective) {
 		conn := client.NewConfig(k8sFlags)
 		if c, err := client.InitConnection(conn, slog.Default()); err == nil {
 			if nss, err := c.ValidNamespaceNames(); err == nil {
@@ -391,7 +399,7 @@ func initK8sFlagCompletion() {
 }
 
 func k8sFlagCompletion[T any](picker k8sPickerFn[T]) completeFn {
-	return func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	return func(_ *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		conn := client.NewConfig(k8sFlags)
 		cfg, err := conn.RawConfig()
 		if err != nil {

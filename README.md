@@ -22,9 +22,7 @@ Your donations will go a long way in keeping our servers lights on and beers in 
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/derailed/k9s?)](https://goreportcard.com/report/github.com/derailed/k9s)
 [![golangci badge](https://github.com/golangci/golangci-web/blob/master/src/assets/images/badge_a_plus_flat.svg)](https://golangci.com/r/github.com/derailed/k9s)
-[![codebeat badge](https://codebeat.co/badges/89e5a80e-dfe8-4426-acf6-6be781e0a12e)](https://codebeat.co/projects/github-com-derailed-k9s-master)
-[![Build Status](https://api.travis-ci.com/derailed/k9s.svg?branch=master)](https://travis-ci.com/derailed/k9s)
-[![Docker Repository on Quay](https://quay.io/repository/derailed/k9s/status "Docker Repository on Quay")](https://quay.io/repository/derailed/k9s)
+[![Docker Pulls](https://img.shields.io/docker/pulls/derailed/k9s.svg?maxAge=604800)](https://hub.docker.com/r/derailed/k9s/)
 [![release](https://img.shields.io/github/release-pre/derailed/k9s.svg)](https://github.com/derailed/k9s/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/mum4k/termdash/blob/master/LICENSE)
 [![Releases](https://img.shields.io/github/downloads/derailed/k9s/total.svg)](https://github.com/derailed/k9s/releases)
@@ -73,18 +71,7 @@ Please refer to our [K9s documentation](https://k9scli.io) site for installation
 Wanna discuss K9s features with your fellow `K9sers` or simply show your support for this tool?
 
 * Channel: [K9sersSlack](https://k9sers.slack.com/)
-* Invite: [K9slackers Invite](https://join.slack.com/t/k9sers/shared_invite/enQtOTA5MDEyNzI5MTU0LWQ1ZGI3MzliYzZhZWEyNzYxYzA3NjE0YTk1YmFmNzViZjIyNzhkZGI0MmJjYzhlNjdlMGJhYzE2ZGU1NjkyNTM)
-
----
-
-## 🥳 A Word From Our Rhodium Sponsors...
-
-Below are organizations that have opted to show their support and sponsor K9s.
-
-<br/>
-<a href="https://panfactum.com"><img src="assets/sponsors/panfactum.png" alt="panfactum"></a>
-<br/>
-<br/>
+* Invite: [K9slackers Invite](https://join.slack.com/t/k9sers/shared_invite/zt-3360a389v-ElLHrb0Dp1kAXqYUItSAFA)
 
 ---
 
@@ -135,6 +122,12 @@ Binaries for Linux, Windows and Mac are available as tarballs in the [release pa
   wget https://github.com/derailed/k9s/releases/latest/download/k9s_linux_amd64.deb && apt install ./k9s_linux_amd64.deb && rm k9s_linux_amd64.deb
   ```
 
+* On Fedora (42+)
+
+  ```shell
+  dnf install k9s
+  ```
+
 * Via [Winget](https://github.com/microsoft/winget-cli) for Windows
 
   ```shell
@@ -172,6 +165,12 @@ Binaries for Linux, Windows and Mac are available as tarballs in the [release pa
   pkgx k9s
   ```
 
+* Via [gah](https://github.com/marverix/gah) for Linux and macOS
+
+  ```shell
+  gah install k9s
+  ```
+
 * Via [Webi](https://webinstall.dev) for Windows
 
   ```shell
@@ -207,13 +206,13 @@ Binaries for Linux, Windows and Mac are available as tarballs in the [release pa
   You can run k9s as a Docker container by mounting your `KUBECONFIG`:
 
   ```shell
-  docker run --rm -it -v $KUBECONFIG:/root/.kube/config quay.io/derailed/k9s
+  docker run --rm -it -v $KUBECONFIG:/root/.kube/config derailed/k9s
   ```
 
   For default path it would be:
 
   ```shell
-  docker run --rm -it -v ~/.kube/config:/root/.kube/config quay.io/derailed/k9s
+  docker run --rm -it -v ~/.kube/config:/root/.kube/config derailed/k9s
   ```
 
 ### Building your own Docker image
@@ -407,14 +406,27 @@ You can now override the context portForward default address configuration by se
   k9s:
     # Enable periodic refresh of resource browser windows. Default false
     liveViewAutoRefresh: false
+    # !!New!! v0.50.8...
+    # Extends the list of supported GPU vendors. The key is the vendor name, the value must correspond to k8s resource driver designation.
+    # Default known GPU vendors:
+    # nvidia: nvidia.com/gpu
+	  # nvidia-shared: nvidia.com/gpu.shared
+	  # amd: amd.com/gpu
+	  # intel: gpu.intel.com/i915
+    gpuVendors:
+      bozo: bozo/gpu  # extends the gpu vendor and add "bozo"
     # The path to screen dump. Default: '%temp_dir%/k9s-screens-%username%' (k9s info)
     screenDumpDir: /tmp/dumps
-    # Represents ui poll intervals. Default 2secs
+    # Represents ui poll intervals in seconds. Default 2.0 secs. Minimum value is 2.0 - values below will be capped to the minimum.
     refreshRate: 2
+    # Overrides the default k8s api server requests timeout. Defaults 120s
+    apiServerTimeout: 15s
     # Number of retries once the connection to the api-server is lost. Default 15.
     maxConnRetry: 5
     # Indicates whether modification commands like delete/kill/edit are disabled. Default is false
     readOnly: false
+    # This setting allows users to specify the default view, but it is not set by default.
+    defaultView: ""
     # Toggles whether k9s should exit when CTRL-C is pressed. When set to true, you will need to exit k9s via the :quit command. Default is false.
     noExitOnCtrlC: false
     #UI settings
@@ -429,15 +441,18 @@ You can now override the context portForward default address configuration by se
       crumbsless: false
       # Set to true to suppress the K9s splash screen on start. Default false. Note that for larger clusters or higher latency connections, there may be no resources visible initially until local caches have finished populating.
       splashless: false
+      # Toggles icons display as not all terminal support these chars. Default: true
       noIcons: false
       # Toggles reactive UI. This option provide for watching on disk artifacts changes and update the UI live Defaults to false.
       reactive: false
       # By default all contexts will use the dracula skin unless explicitly overridden in the context config file.
-      skin: dracula # => assumes the file skins/dracula.yaml is present in the  $XDG_DATA_HOME/k9s/skins directory
+      skin: dracula # => assumes the file skins/dracula.yaml is present in the  $XDG_DATA_HOME/k9s/skins directory. Can be overriden with K9S_SKIN.
+      # Convert dark skins to light, or vice versa, preserving hue. Default: false
+      invert: false
       # Allows to set certain views default fullscreen mode. (yaml, helm history, describe, value_extender, details, logs) Default false
       defaultsToFullScreen: false
       # Show full resource GVR (Group/Version/Resource) vs just R. Default: false.
-      useGVRTitleFormat: false
+      useFullGVRTitle: false
     # Toggles icons display as not all terminal support these chars.
     noIcons: false
     # Toggles whether k9s should check for the latest revision from the GitHub repository releases. Default is false.
@@ -456,6 +471,8 @@ You can now override the context portForward default address configuration by se
       textWrap: false
       # Autoscroll in logs will be disabled. Default is false.
       disableAutoscroll: false
+      # Enable column locking when autoscroll is enabled. Default is false.
+      columnLock: false
       # Toggles log line timestamp info. Default false
       showTime: false
     # Provide shell pod customization when nodeShell feature gate is enabled!
@@ -470,6 +487,13 @@ You can now override the context portForward default address configuration by se
         memory: 100Mi
       # Enable TTY
       tty: true
+      hostPathVolume:
+      - name: docker-socket
+        # Mount the Docker socket into the shell pod
+        mountPath: /var/run/docker.sock
+        # The path on the host to mount
+        hostPath: /var/run/docker.sock
+        readOnly: true
   ```
 
 ---
@@ -517,6 +541,21 @@ k9s:
     nodeShell: true # => Enable this feature gate to make nodeShell available on this cluster
   portForwardAddress: localhost
 ```
+
+### Customizing the Shell Pod
+You can also customize the shell pod by adding a `hostPathVolume` to your shell pod. This allows you to mount a local directory or file into the shell pod. For example, if you want to mount the Docker socket into the shell pod, you can do so as follows:
+```yaml
+k9s:
+  shellPod:
+    hostPathVolume:
+    - name: docker-socket
+      # Mount the Docker socket into the shell pod
+      mountPath: /var/run/docker.sock
+      # The path on the host to mount
+      hostPath: /var/run/docker.sock
+      readOnly: true
+```
+This will mount the Docker socket into the shell pod at `/var/run/docker.sock` and make it read-only. You can also mount any other directory or file in a similar way.
 
 ---
 
@@ -1012,7 +1051,7 @@ Example: Dracula Skin ;)
 You can style K9s based on your own sense of look and style. Skins are YAML files, that enable a user to change the K9s presentation layer. See this repo `skins` directory for examples.
 You can skin k9s by default by specifying a UI.skin attribute. You can also change K9s skins based on the context you are connecting too.
 In this case, you can specify a skin field on your cluster config aka `skin: dracula` (just the name of the skin file without the extension!) and copy this repo
-`skins/dracula.yaml` to `$XDG_CONFIG_HOME/k9s/skins/` directory.
+`skins/dracula.yaml` to `$XDG_CONFIG_HOME/k9s/skins/` directory. You can also change the skin by setting `K9S_SKIN` in the environment, e.g. `export K9S_SKIN="dracula"`.
 
 In the case where your cluster spans several contexts, you can add a skin context configuration to your context configuration.
 This is a collection of {context_name, skin} tuples (please see example below!)
@@ -1061,6 +1100,7 @@ k9s:
     crumbsless: false
     splashless: false
     noIcons: false
+    invert: false
     # Toggles reactive UI. This option provide for watching on disk artifacts changes and update the UI live  Defaults to false.
     reactive: false
     # By default all contexts will use the dracula skin unless explicitly overridden in the context config file.
@@ -1085,6 +1125,7 @@ k9s:
     sinceSeconds: -1
     textWrap: false
     disableAutoscroll: false
+    columnLock: false
     showTime: false
   thresholds:
     cpu:
@@ -1226,4 +1267,4 @@ We always enjoy hearing from folks who benefit from our work!
 
 ---
 
-<img src="assets/imhotep_logo.png" width="32" height="auto" alt="Imhotep"/> &nbsp;© 2025 Imhotep Software LLC. All materials licensed under [Apache v2.0](http://www.apache.org/licenses/LICENSE-2.0)
+<img src="assets/imhotep_logo.png" width="32" height="auto" alt="Imhotep"/> &nbsp;© 2026 Imhotep Software LLC. All materials licensed under [Apache v2.0](http://www.apache.org/licenses/LICENSE-2.0)

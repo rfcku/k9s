@@ -4,6 +4,8 @@
 package cmd
 
 import (
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -19,61 +21,82 @@ const (
 type args map[string]string
 
 func newArgs(p *Interpreter, aa []string) args {
-	args := make(args, len(aa))
+	arguments := make(args, len(aa))
 	if len(aa) == 0 {
-		return args
+		return arguments
 	}
 
 	for i := 0; i < len(aa); i++ {
 		a := strings.TrimSpace(aa[i])
 		switch {
-		case strings.Index(a, contextFlag) == 0:
-			args[contextKey] = a[1:]
-
 		case strings.Index(a, fuzzyFlag) == 0:
 			if a == fuzzyFlag {
-				if i++; i < len(aa) {
-					args[fuzzyKey] = strings.ToLower(strings.TrimSpace(aa[i]))
+				i++
+				if i < len(aa) {
+					arguments[fuzzyKey] = strings.ToLower(strings.TrimSpace(aa[i]))
 				}
 			} else {
-				args[fuzzyKey] = strings.ToLower(a[2:])
+				arguments[fuzzyKey] = strings.ToLower(a[2:])
 			}
 
 		case strings.Index(a, filterFlag) == 0:
 			if p.IsDirCmd() {
-				if _, ok := args[topicKey]; !ok {
-					args[topicKey] = a
+				if _, ok := arguments[topicKey]; !ok {
+					arguments[topicKey] = a
 				}
 			} else {
-				args[filterKey] = strings.ToLower(a[1:])
+				arguments[filterKey] = strings.ToLower(a[1:])
 			}
 
-		case strings.Contains(a, labelFlag):
-			if ll := ToLabels(a); len(ll) != 0 {
-				args[labelKey] = strings.ToLower(a)
-			}
+		case strings.Index(a, contextFlag) == 0:
+			arguments[contextKey] = a[1:]
+
+		case isLabelArg(a):
+			arguments[labelKey] = strings.ToLower(a)
 
 		default:
 			switch {
 			case p.IsContextCmd():
-				args[contextKey] = a
+				arguments[contextKey] = a
+
 			case p.IsDirCmd():
-				if _, ok := args[topicKey]; !ok {
-					args[topicKey] = a
+				if _, ok := arguments[topicKey]; !ok {
+					arguments[topicKey] = a
 				}
+
 			case p.IsXrayCmd():
-				if _, ok := args[topicKey]; ok {
-					args[nsKey] = strings.ToLower(a)
+				if _, ok := arguments[topicKey]; ok {
+					arguments[nsKey] = strings.ToLower(a)
 				} else {
-					args[topicKey] = strings.ToLower(a)
+					arguments[topicKey] = strings.ToLower(a)
 				}
+
 			default:
-				args[nsKey] = strings.ToLower(a)
+				arguments[nsKey] = strings.ToLower(a)
 			}
 		}
 	}
 
-	return args
+	return arguments
+}
+
+func (a args) String() string {
+	ss := make([]string, 0, len(a))
+	kk := maps.Keys(a)
+	for _, k := range slices.Sorted(kk) {
+		v := a[k]
+		switch k {
+		case labelKey:
+			v = "'" + v + "'"
+		case filterKey:
+			v = filterFlag + v
+		case contextKey:
+			v = contextFlag + v
+		}
+		ss = append(ss, v)
+	}
+
+	return strings.Join(ss, " ")
 }
 
 func (a args) hasFilters() bool {
@@ -82,4 +105,14 @@ func (a args) hasFilters() bool {
 	_, lok := a[labelKey]
 
 	return fok || zok || lok
+}
+
+func isLabelArg(arg string) bool {
+	for _, flag := range labelFlags {
+		if strings.Contains(arg, flag) {
+			return true
+		}
+	}
+
+	return false
 }

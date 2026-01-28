@@ -4,9 +4,12 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPluginLoad(t *testing.T) {
@@ -103,10 +106,10 @@ func TestSinglePluginFileLoad(t *testing.T) {
 	}
 
 	p := NewPlugins()
-	assert.NoError(t, p.load("testdata/plugins/plugins.yaml"))
-	assert.NoError(t, p.loadDir("/random/dir/not/exist"))
+	require.NoError(t, p.load("testdata/plugins/plugins.yaml"))
+	require.NoError(t, p.loadDir("/random/dir/not/exist"))
 
-	assert.Equal(t, 1, len(p.Plugins))
+	assert.Len(t, p.Plugins, 1)
 	v, ok := p.Plugins["blah"]
 
 	assert.True(t, ok)
@@ -169,9 +172,73 @@ func TestMultiplePluginFilesLoad(t *testing.T) {
 	for k, u := range uu {
 		t.Run(k, func(t *testing.T) {
 			p := NewPlugins()
-			assert.NoError(t, p.load(u.path))
-			assert.NoError(t, p.loadDir(u.dir))
+			require.NoError(t, p.load(u.path))
+			require.NoError(t, p.loadDir(u.dir))
 			assert.Equal(t, u.ee, p)
 		})
 	}
+}
+
+func TestPluginLoadSymlink(t *testing.T) {
+	tmp := t.TempDir()
+
+	linkFile := filepath.Join(tmp, "plugins-symlink.yaml")
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Symlink(filepath.Join(wd, "testdata", "plugins", "plugins.yaml"), linkFile))
+
+	linkDir := filepath.Join(tmp, "plugins-dir-symlink")
+	require.NoError(t, os.Symlink(filepath.Join(wd, "testdata", "plugins", "dir"), linkDir))
+
+	// Add a symlink with an infinite loop
+	loopDir := filepath.Join(tmp, "loop")
+	require.NoError(t, os.Mkdir(loopDir, 0o755))
+	require.NoError(t, os.Symlink(loopDir, filepath.Join(loopDir, "self")))
+
+	p := NewPlugins()
+	require.NoError(t, p.loadDir(tmp))
+
+	ee := Plugins{
+		Plugins: plugins{
+			"blah": Plugin{
+				Scopes:      []string{"po", "dp"},
+				Args:        []string{"-n", "$NAMESPACE", "-boolean"},
+				ShortCut:    "shift-s",
+				Description: "blee",
+				Command:     "duh",
+				Confirm:     true,
+			},
+			"snippet.1": {
+				ShortCut:        "shift-s",
+				Command:         "duh",
+				Scopes:          []string{"po", "dp"},
+				Args:            []string{"-n", "$NAMESPACE", "-boolean"},
+				Description:     "blee",
+				Confirm:         true,
+				OverwriteOutput: true,
+			},
+			"snippet.2": {
+				Scopes:      []string{"svc", "ing"},
+				Args:        []string{"-n", "$NAMESPACE", "-oyaml"},
+				ShortCut:    "shift-r",
+				Description: "bla",
+				Command:     "duha",
+				Background:  true,
+			},
+			"crapola": {
+				Scopes:      []string{"pods"},
+				Command:     "crapola",
+				Description: "crapola",
+				ShortCut:    "Shift-1",
+			},
+			"bozo": {
+				Scopes:      []string{"pods", "svc"},
+				Command:     "bozo",
+				Description: "bozo",
+				ShortCut:    "Shift-2",
+			},
+		},
+	}
+
+	assert.Equal(t, ee, p)
 }

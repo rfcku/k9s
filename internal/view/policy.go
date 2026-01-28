@@ -26,9 +26,9 @@ type Policy struct {
 }
 
 // NewPolicy returns a new viewer.
-func NewPolicy(app *App, subject, name string) *Policy {
+func NewPolicy(_ *App, subject, name string) *Policy {
 	p := Policy{
-		ResourceViewer: NewBrowser(client.NewGVR("policy")),
+		ResourceViewer: NewBrowser(client.PolGVR),
 		subjectKind:    subject,
 		subjectName:    name,
 	}
@@ -46,13 +46,8 @@ func (p *Policy) subjectCtx(ctx context.Context) context.Context {
 	return context.WithValue(ctx, internal.KeySubjectName, p.subjectName)
 }
 
-func (p *Policy) bindKeys(aa *ui.KeyActions) {
+func (*Policy) bindKeys(aa *ui.KeyActions) {
 	aa.Delete(ui.KeyShiftA, tcell.KeyCtrlSpace, ui.KeySpace)
-	aa.Bulk(ui.KeyMap{
-		ui.KeyShiftN: ui.NewKeyAction("Sort Name", p.GetTable().SortColCmd(nameCol, true), false),
-		ui.KeyShiftA: ui.NewKeyAction("Sort Api-Group", p.GetTable().SortColCmd("API-GROUP", true), false),
-		ui.KeyShiftB: ui.NewKeyAction("Sort Binding", p.GetTable().SortColCmd("BINDING", true), false),
-	})
 }
 
 func mapSubject(subject string) string {

@@ -4,11 +4,13 @@
 package port_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/derailed/k9s/internal/port"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -92,7 +94,7 @@ func TestPFsToTunnel(t *testing.T) {
 		},
 	}
 
-	f := func(port.PortTunnel) bool {
+	f := func(context.Context, port.PortTunnel) bool {
 		return true
 	}
 
@@ -100,7 +102,7 @@ func TestPFsToTunnel(t *testing.T) {
 		u := uu[k]
 		t.Run(k, func(t *testing.T) {
 			pfs, err := port.ParsePFs(u.exp)
-			assert.Nil(t, err)
+			require.NoError(t, err)
 			pts, err := pfs.ToTunnels("fred", u.specs, f)
 			assert.Equal(t, u.e, err)
 			if err != nil {
@@ -136,9 +138,9 @@ func TestPFsToPortSpec(t *testing.T) {
 			if err != nil {
 				return
 			}
-			spec, port := pfs.ToPortSpec(u.specs)
+			spec, prt := pfs.ToPortSpec(u.specs)
 			assert.Equal(t, u.spec, spec)
-			assert.Equal(t, u.port, port)
+			assert.Equal(t, u.port, prt)
 		})
 	}
 }

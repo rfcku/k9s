@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
@@ -32,7 +31,7 @@ type Table struct {
 }
 
 // NewTable returns a new viewer.
-func NewTable(gvr client.GVR) *Table {
+func NewTable(gvr *client.GVR) *Table {
 	t := Table{
 		Table: ui.NewTable(gvr),
 	}
@@ -60,20 +59,20 @@ func (t *Table) Init(ctx context.Context) (err error) {
 	}
 	t.SetInputCapture(t.keyboard)
 	t.bindKeys()
-	t.GetModel().SetRefreshRate(time.Duration(t.app.Config.K9s.GetRefreshRate()) * time.Second)
+	t.GetModel().SetRefreshRate(t.app.Config.K9s.RefreshDuration())
 	t.CmdBuff().AddListener(t)
 
 	return nil
 }
 
 // SetCommand sets the current command.
-func (t *Table) SetCommand(cmd *cmd.Interpreter) {
-	t.command = cmd
+func (t *Table) SetCommand(i *cmd.Interpreter) {
+	t.command = i
 }
 
 // HeaderIndex returns index of a given column or false if not found.
 func (t *Table) HeaderIndex(colName string) (int, bool) {
-	for i := 0; i < t.GetColumnCount(); i++ {
+	for i := range t.GetColumnCount() {
 		h := t.GetCell(0, i)
 		if h == nil {
 			continue
@@ -96,6 +95,19 @@ func (t *Table) SendKey(evt *tcell.EventKey) {
 
 func (t *Table) keyboard(evt *tcell.EventKey) *tcell.EventKey {
 	key := evt.Key()
+
+	// Handle Shift+Left/Right for column selection
+	if evt.Modifiers()&tcell.ModShift != 0 {
+		if key == tcell.KeyLeft {
+			t.Table.SelectPrevColumn()
+			return nil
+		}
+		if key == tcell.KeyRight {
+			t.Table.SelectNextColumn()
+			return nil
+		}
+	}
+
 	if key == tcell.KeyUp || key == tcell.KeyDown {
 		return evt
 	}
@@ -150,7 +162,12 @@ func (t *Table) Start() {
 	t.Styles().AddListener(t.Table)
 	cmds := []string{t.Table.GVR().String()}
 	if t.command != nil {
-		cmds = append(cmds, t.command.GetLine())
+		if t.command.GetLine() != t.Table.GVR().String() {
+			cmds = append(cmds, t.command.GetLine())
+		}
+		for _, a := range t.command.Aliases() {
+			cmds = append(cmds, a)
+		}
 	}
 	t.App().CustomView().AddListeners(t.Table, cmds...)
 }
@@ -168,7 +185,7 @@ func (t *Table) SetEnterFn(f EnterFunc) {
 }
 
 // SetExtraActionsFn specifies custom keyboard behavior.
-func (t *Table) SetExtraActionsFn(BoostActionsFunc) {}
+func (*Table) SetExtraActionsFn(BoostActionsFunc) {}
 
 // BufferCompleted indicates input was accepted.
 func (t *Table) BufferCompleted(text, _ string) {
@@ -178,7 +195,7 @@ func (t *Table) BufferCompleted(text, _ string) {
 }
 
 // BufferChanged indicates the buffer was changed.
-func (t *Table) BufferChanged(_, _ string) {}
+func (*Table) BufferChanged(_, _ string) {}
 
 // BufferActive indicates the buff activity changed.
 func (t *Table) BufferActive(state bool, k model.BufferKind) {
@@ -188,7 +205,7 @@ func (t *Table) BufferActive(state bool, k model.BufferKind) {
 	}
 }
 
-func (t *Table) saveCmd(evt *tcell.EventKey) *tcell.EventKey {
+func (t *Table) saveCmd(*tcell.EventKey) *tcell.EventKey {
 	if path, err := saveTable(t.app.Config.K9s.ContextScreenDumpDir(), t.GVR().R(), t.Path, t.GetFilteredData()); err != nil {
 		t.app.Flash().Err(err)
 	} else {
@@ -210,64 +227,95 @@ func (t *Table) bindKeys() {
 		tcell.KeyCtrlW:         ui.NewKeyAction("Toggle Wide", t.toggleWideCmd, false),
 		ui.KeyShiftN:           ui.NewKeyAction("Sort Name", t.SortColCmd(nameCol, true), false),
 		ui.KeyShiftA:           ui.NewKeyAction("Sort Age", t.SortColCmd(ageCol, true), false),
+		ui.KeyShiftS:           ui.NewKeyAction("Sort Status", t.SortColCmd(statusCol, true), false),
+		ui.KeyShiftO:           ui.NewKeyAction("Sort Selected Column", t.sortSelectedColumnCmd, false),
 	})
 }
 
-func (t *Table) toggleFaultCmd(evt *tcell.EventKey) *tcell.EventKey {
+func (t *Table) toggleFaultCmd(*tcell.EventKey) *tcell.EventKey {
 	t.ToggleToast()
 	return nil
 }
 
-func (t *Table) toggleWideCmd(evt *tcell.EventKey) *tcell.EventKey {
+func (t *Table) toggleWideCmd(*tcell.EventKey) *tcell.EventKey {
 	t.ToggleWide()
 	return nil
 }
 
+func (t *Table) sortSelectedColumnCmd(*tcell.EventKey) *tcell.EventKey {
+	t.Table.SortSelectedColumn()
+	return nil
+}
+
 func (t *Table) cpCmd(evt *tcell.EventKey) *tcell.EventKey {
-	path := t.GetSelectedItem()
-	if path == "" {
+	paths := t.GetSelectedItems()
+	if len(paths) == 0 {
 		return evt
 	}
-	_, n := client.Namespaced(path)
-	if err := clipboardWrite(n); err != nil {
+
+	names := make([]string, 0, len(paths))
+	for _, path := range paths {
+		_, n := client.Namespaced(path)
+		names = append(names, n)
+	}
+
+	text := strings.Join(names, "\n")
+	if err := clipboardWrite(text); err != nil {
 		t.app.Flash().Err(err)
 		return nil
 	}
-	t.app.Flash().Info("Resource name copied to clipboard...")
+
+	if len(names) > 1 {
+		t.app.Flash().Infof("%d resource names copied to clipboard...", len(names))
+	} else {
+		t.app.Flash().Info("Resource name copied to clipboard...")
+	}
 
 	return nil
 }
 
 func (t *Table) cpNsCmd(evt *tcell.EventKey) *tcell.EventKey {
-	path := t.GetSelectedItem()
-	if path == "" {
+	paths := t.GetSelectedItems()
+	if len(paths) == 0 {
 		return evt
 	}
-	ns, _ := client.Namespaced(path)
-	if err := clipboardWrite(ns); err != nil {
+
+	namespaces := make([]string, 0, len(paths))
+	for _, path := range paths {
+		ns, _ := client.Namespaced(path)
+		namespaces = append(namespaces, ns)
+	}
+
+	text := strings.Join(namespaces, "\n")
+	if err := clipboardWrite(text); err != nil {
 		t.app.Flash().Err(err)
 		return nil
 	}
-	t.app.Flash().Info("Resource namespace copied to clipboard...")
+
+	if len(namespaces) > 1 {
+		t.app.Flash().Infof("%d resource namespaces copied to clipboard...", len(namespaces))
+	} else {
+		t.app.Flash().Info("Resource namespace copied to clipboard...")
+	}
 
 	return nil
 }
 
-func (t *Table) markCmd(evt *tcell.EventKey) *tcell.EventKey {
+func (t *Table) markCmd(*tcell.EventKey) *tcell.EventKey {
 	t.ToggleMark()
 	t.Refresh()
 
 	return nil
 }
 
-func (t *Table) markSpanCmd(evt *tcell.EventKey) *tcell.EventKey {
+func (t *Table) markSpanCmd(*tcell.EventKey) *tcell.EventKey {
 	t.SpanMark()
 	t.Refresh()
 
 	return nil
 }
 
-func (t *Table) clearMarksCmd(evt *tcell.EventKey) *tcell.EventKey {
+func (t *Table) clearMarksCmd(*tcell.EventKey) *tcell.EventKey {
 	t.ClearMarks()
 	t.Refresh()
 

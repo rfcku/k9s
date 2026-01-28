@@ -82,9 +82,7 @@ func (c *CmdBuff) IsActive() bool {
 // SetActive toggles cmd buffer active state.
 func (c *CmdBuff) SetActive(b bool) {
 	c.mx.Lock()
-	{
-		c.active = b
-	}
+	c.active = b
 	c.mx.Unlock()
 
 	c.fireActive(c.active)
@@ -123,25 +121,23 @@ func (c *CmdBuff) hasCancel() bool {
 
 func (c *CmdBuff) setCancel(f context.CancelFunc) {
 	c.mx.Lock()
-	{
-		c.cancel = f
-	}
+	c.cancel = f
 	c.mx.Unlock()
 }
 
 func (c *CmdBuff) resetCancel() {
 	c.mx.Lock()
-	{
-		c.cancel = nil
-	}
+	c.cancel = nil
 	c.mx.Unlock()
 }
 
 // SetText initializes the buffer with a command.
-func (c *CmdBuff) SetText(text, suggestion string) {
+func (c *CmdBuff) SetText(text, suggestion string, wipe bool) {
 	c.mx.Lock()
-	{
+	if wipe {
 		c.buff, c.suggestion = []rune(text), suggestion
+	} else {
+		c.buff, c.suggestion = append(c.buff, []rune(text)...), suggestion
 	}
 	c.mx.Unlock()
 	c.fireBufferCompleted(c.GetText(), c.GetSuggestion())
@@ -150,9 +146,7 @@ func (c *CmdBuff) SetText(text, suggestion string) {
 // Add adds a new character to the buffer.
 func (c *CmdBuff) Add(r rune) {
 	c.mx.Lock()
-	{
-		c.buff = append(c.buff, r)
-	}
+	c.buff = append(c.buff, r)
 	c.mx.Unlock()
 	c.fireBufferChanged(c.GetText(), c.GetSuggestion())
 	if c.hasCancel() {
@@ -173,7 +167,7 @@ func (c *CmdBuff) Delete() {
 	if c.Empty() {
 		return
 	}
-	c.SetText(string(c.buff[:len(c.buff)-1]), "")
+	c.SetText(string(c.buff[:len(c.buff)-1]), "", true)
 	c.fireBufferChanged(c.GetText(), c.GetSuggestion())
 	if c.hasCancel() {
 		return
@@ -192,9 +186,7 @@ func (c *CmdBuff) Delete() {
 // ClearText clears out command buffer.
 func (c *CmdBuff) ClearText(fire bool) {
 	c.mx.Lock()
-	{
-		c.buff, c.suggestion = c.buff[:0], ""
-	}
+	c.buff, c.suggestion = c.buff[:0], ""
 	c.mx.Unlock()
 
 	if fire {
@@ -223,9 +215,7 @@ func (c *CmdBuff) Empty() bool {
 // AddListener registers a cmd buffer listener.
 func (c *CmdBuff) AddListener(w BuffWatcher) {
 	c.mx.Lock()
-	{
-		c.listeners[w] = struct{}{}
-	}
+	c.listeners[w] = struct{}{}
 	c.mx.Unlock()
 }
 

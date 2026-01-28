@@ -20,7 +20,7 @@ type Alias struct {
 }
 
 // NewAlias returns a new alias view.
-func NewAlias(gvr client.GVR) ResourceViewer {
+func NewAlias(gvr *client.GVR) ResourceViewer {
 	a := Alias{
 		ResourceViewer: NewBrowser(gvr),
 	}
@@ -47,7 +47,7 @@ func (a *Alias) aliasContext(ctx context.Context) context.Context {
 }
 
 func (a *Alias) bindKeys(aa *ui.KeyActions) {
-	aa.Delete(ui.KeyShiftA, ui.KeyShiftN, tcell.KeyCtrlS, tcell.KeyCtrlSpace, ui.KeySpace)
+	aa.Delete(ui.KeyShiftA, ui.KeyShiftN, ui.KeyShiftS, tcell.KeyCtrlS, tcell.KeyCtrlSpace, ui.KeySpace)
 	aa.Delete(tcell.KeyCtrlW, tcell.KeyCtrlL)
 	aa.Bulk(ui.KeyMap{
 		tcell.KeyEnter: ui.NewKeyAction("Goto", a.gotoCmd, true),
@@ -66,8 +66,7 @@ func (a *Alias) gotoCmd(evt *tcell.EventKey) *tcell.EventKey {
 	if path == "" {
 		return evt
 	}
-	gvr := client.NewGVR(path)
-	a.App().gotoResource(gvr.String(), "", true, true)
+	a.App().gotoResource(client.NewGVR(path).String(), "", true, true)
 
 	return nil
 }

@@ -14,22 +14,21 @@ import (
 	"github.com/anchore/clio"
 	"github.com/anchore/grype/cmd/grype/cli/options"
 	"github.com/anchore/grype/grype"
-	"github.com/anchore/grype/grype/db/legacy/distribution"
-	v5 "github.com/anchore/grype/grype/db/v5"
-	"github.com/anchore/grype/grype/db/v5/matcher"
-	"github.com/anchore/grype/grype/db/v5/matcher/dotnet"
-	"github.com/anchore/grype/grype/db/v5/matcher/golang"
-	"github.com/anchore/grype/grype/db/v5/matcher/java"
-	"github.com/anchore/grype/grype/db/v5/matcher/javascript"
-	"github.com/anchore/grype/grype/db/v5/matcher/python"
-	"github.com/anchore/grype/grype/db/v5/matcher/ruby"
-	"github.com/anchore/grype/grype/db/v5/matcher/stock"
+	"github.com/anchore/grype/grype/match"
+	"github.com/anchore/grype/grype/matcher"
+	"github.com/anchore/grype/grype/matcher/dotnet"
+	"github.com/anchore/grype/grype/matcher/golang"
+	"github.com/anchore/grype/grype/matcher/java"
+	"github.com/anchore/grype/grype/matcher/javascript"
+	"github.com/anchore/grype/grype/matcher/python"
+	"github.com/anchore/grype/grype/matcher/ruby"
+	"github.com/anchore/grype/grype/matcher/stock"
 	"github.com/anchore/grype/grype/pkg"
 	"github.com/anchore/grype/grype/vex"
+	"github.com/anchore/grype/grype/vulnerability"
 	"github.com/anchore/syft/syft"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/slogs"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var ImgScanner *imageScanner
@@ -41,8 +40,8 @@ const (
 )
 
 type imageScanner struct {
-	store       *v5.ProviderStore
-	dbStatus    *distribution.Status
+	provider    vulnerability.Provider
+	status      *vulnerability.ProviderStatus
 	opts        *options.Grype
 	scans       Scans
 	mx          sync.RWMutex
@@ -60,8 +59,8 @@ func NewImageScanner(cfg config.ImageScans, l *slog.Logger) *imageScanner {
 	}
 }
 
-func (s *imageScanner) ShouldExcludes(m metav1.ObjectMeta) bool {
-	return s.config.ShouldExclude(m.Namespace, m.Labels)
+func (s *imageScanner) ShouldExcludes(ns string, lbls map[string]string) bool {
+	return s.config.ShouldExclude(ns, lbls)
 }
 
 // GetScan fetch scan for a given image. Returns ok=false when not found.
@@ -83,29 +82,37 @@ func (s *imageScanner) setScan(img string, sc *Scan) {
 
 // Init initializes image vulnerability database.
 func (s *imageScanner) Init(name, version string) {
-	s.mx.Lock()
-	defer s.mx.Unlock()
+	defer func(t time.Time) {
+		slog.Debug("VulDb initialization complete",
+			slogs.Elapsed, time.Since(t),
+		)
+	}(time.Now())
 
-	id := clio.Identification{Name: name, Version: version}
-	s.opts = options.DefaultGrype(id)
-	s.opts.GenerateMissingCPEs = true
+	opts := options.DefaultGrype(clio.Identification{Name: name, Version: version})
+	opts.GenerateMissingCPEs = true
 
-	var err error
-	s.store, s.dbStatus, err = grype.LoadVulnerabilityDB(
-		s.opts.DB.ToLegacyCuratorConfig(),
-		s.opts.DB.AutoUpdate,
+	provider, status, err := grype.LoadVulnerabilityDB(
+		opts.ToClientConfig(),
+		opts.ToCuratorConfig(),
+		opts.DB.AutoUpdate,
 	)
 	if err != nil {
 		s.log.Error("VulDb load failed", slogs.Error, err)
 		return
 	}
+	s.mx.Lock()
+	s.opts, s.provider, s.status = opts, provider, status
+	s.mx.Unlock()
 
-	if err := validateDBLoad(err, s.dbStatus); err != nil {
-		s.log.Error("VulDb validate failed", slogs.Error, err)
+	if e := validateDBLoad(err, status); e != nil {
+		s.log.Error("VulDb validate failed", slogs.Error, e)
 		return
 	}
 
+	s.mx.Lock()
 	s.initialized = true
+	s.mx.Unlock()
+	slog.Debug("VulDB initialized")
 }
 
 // Stop closes scan database.
@@ -113,9 +120,9 @@ func (s *imageScanner) Stop() {
 	s.mx.RLock()
 	defer s.mx.RUnlock()
 
-	if s.store != nil {
-		_ = s.store.Close()
-		s.store = nil
+	if s.provider != nil {
+		_ = s.provider.Close()
+		s.provider = nil
 	}
 }
 
@@ -130,7 +137,7 @@ func (s *imageScanner) Score(ii ...string) string {
 	return sc.String()
 }
 
-func (s *imageScanner) isInitialized() bool {
+func (s *imageScanner) IsInitialized() bool {
 	s.mx.RLock()
 	defer s.mx.RUnlock()
 
@@ -138,9 +145,6 @@ func (s *imageScanner) isInitialized() bool {
 }
 
 func (s *imageScanner) Enqueue(ctx context.Context, images ...string) {
-	if !s.isInitialized() {
-		return
-	}
 	ctx, cancel := context.WithTimeout(ctx, imgScanTimeout)
 	defer cancel()
 
@@ -168,35 +172,40 @@ func (s *imageScanner) scanWorker(ctx context.Context, img string) {
 
 func (s *imageScanner) scan(_ context.Context, img string, sc *Scan) error {
 	defer func(t time.Time) {
-		s.log.Debug("Time to run vulscan",
+		s.log.Debug("[Vulscan] perf",
 			slogs.Image, img,
 			slogs.Elapsed, time.Since(t),
 		)
 	}(time.Now())
 
-	var errs error
 	packages, pkgContext, _, err := pkg.Provide(img, getProviderConfig(s.opts))
 	if err != nil {
-		errs = errors.Join(errs, fmt.Errorf("failed to catalog %s: %w", img, err))
+		return fmt.Errorf("failed to analyze image packages: %w", err)
+	}
+
+	processor, err := vex.NewProcessor(vex.ProcessorOptions{
+		Documents:   s.opts.VexDocuments,
+		IgnoreRules: s.opts.Ignore,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create VEX processor: %w", err)
 	}
 
 	v := grype.VulnerabilityMatcher{
-		Store:          *s.store,
-		IgnoreRules:    s.opts.Ignore,
-		NormalizeByCVE: s.opts.ByCVE,
-		FailSeverity:   s.opts.FailOnSeverity(),
-		Matchers:       getMatchers(s.opts),
-		VexProcessor: vex.NewProcessor(vex.ProcessorOptions{
-			Documents:   s.opts.VexDocuments,
-			IgnoreRules: s.opts.Ignore,
-		}),
+		VulnerabilityProvider: s.provider,
+		IgnoreRules:           s.opts.Ignore,
+		NormalizeByCVE:        s.opts.ByCVE,
+		FailSeverity:          s.opts.FailOnSeverity(),
+		Matchers:              getMatchers(s.opts),
+		VexProcessor:          processor,
 	}
 
+	var errs error
 	mm, _, err := v.FindMatches(packages, pkgContext)
 	if err != nil {
 		errs = errors.Join(errs, err)
 	}
-	if err := sc.run(mm, s.store); err != nil {
+	if err := sc.run(mm, s.provider); err != nil {
 		errs = errors.Join(errs, err)
 	}
 
@@ -219,7 +228,7 @@ func getProviderConfig(opts *options.Grype) pkg.ProviderConfig {
 	}
 }
 
-func getMatchers(opts *options.Grype) []matcher.Matcher {
+func getMatchers(opts *options.Grype) []match.Matcher {
 	return matcher.NewDefaultMatchers(
 		matcher.Config{
 			Java: java.MatcherConfig{
@@ -231,23 +240,23 @@ func getMatchers(opts *options.Grype) []matcher.Matcher {
 			Dotnet:     dotnet.MatcherConfig(opts.Match.Dotnet),
 			Javascript: javascript.MatcherConfig(opts.Match.Javascript),
 			Golang: golang.MatcherConfig{
-				UseCPEs:               opts.Match.Golang.UseCPEs,
-				AlwaysUseCPEForStdlib: opts.Match.Golang.AlwaysUseCPEForStdlib,
+				UseCPEs:                                opts.Match.Golang.UseCPEs,
+				AlwaysUseCPEForStdlib:                  opts.Match.Golang.AlwaysUseCPEForStdlib,
+				AllowMainModulePseudoVersionComparison: opts.Match.Golang.AllowMainModulePseudoVersionComparison,
 			},
 			Stock: stock.MatcherConfig(opts.Match.Stock),
 		},
 	)
 }
-
-func validateDBLoad(loadErr error, status *distribution.Status) error {
+func validateDBLoad(loadErr error, status *vulnerability.ProviderStatus) error {
 	if loadErr != nil {
 		return fmt.Errorf("failed to load vulnerability db: %w", loadErr)
 	}
 	if status == nil {
 		return fmt.Errorf("unable to determine the status of the vulnerability db")
 	}
-	if status.Err != nil {
-		return fmt.Errorf("db could not be loaded: %w", status.Err)
+	if status.Error != nil {
+		return fmt.Errorf("db could not be loaded: %w", status.Error)
 	}
 
 	return nil

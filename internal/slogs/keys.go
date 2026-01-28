@@ -81,6 +81,7 @@ const (
 
 	// Context tracks a context logger key.
 	Context = "context"
+
 	// Cluster tracks a cluster logger key.
 	Cluster = "cluster"
 
@@ -147,9 +148,6 @@ const (
 	// Log tracks a log logger key.
 	Log = "log"
 
-	// CO tracks a container logger key.
-	CO = "container"
-
 	// Annotation tracks an annotation logger key.
 	Annotation = "annotation"
 
@@ -212,4 +210,22 @@ const (
 
 	// ID tracks an id logger key.
 	ID = "id"
+
+	// ViewSetting tracks a view setting logger key.
+	ViewSetting = "view-setting"
+
+	// JQExp tracks a jq expression logger key.
+	JQExp = "jq-exp"
+
+	// Duration tracks a duration logger key.
+	Duration = "duration"
+
+	// Type tracks a type logger key.
+	Type = "type"
+
+	// Requested tracks a requested value logger key.
+	Requested = "requested"
+
+	// Minimum tracks a minimum value logger key.
+	Minimum = "minimum"
 )

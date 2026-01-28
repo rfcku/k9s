@@ -3,9 +3,7 @@
 
 package model
 
-import (
-	"sort"
-)
+import "sort"
 
 // SuggestionListener listens for suggestions.
 type SuggestionListener interface {
@@ -89,7 +87,7 @@ func (f *FishBuff) CurrentSuggestion() (string, bool) {
 }
 
 // AutoSuggests returns true if model implements auto suggestions.
-func (f *FishBuff) AutoSuggests() bool {
+func (*FishBuff) AutoSuggests() bool {
 	return true
 }
 
@@ -107,7 +105,7 @@ func (f *FishBuff) SetSuggestionFn(fn SuggestionFunc) {
 }
 
 // Notify publish suggestions to all listeners.
-func (f *FishBuff) Notify(delete bool) {
+func (f *FishBuff) Notify(_ bool) {
 	if f.suggestionFn == nil {
 		return
 	}
@@ -135,5 +133,5 @@ func (f *FishBuff) fireSuggestionChanged(ss []string) {
 	} else {
 		suggest = ss[f.suggestionIndex]
 	}
-	f.SetText(f.GetText(), suggest)
+	f.SetText(f.GetText(), suggest, true)
 }

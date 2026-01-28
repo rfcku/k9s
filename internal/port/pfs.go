@@ -4,18 +4,19 @@
 package port
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
 
 // PortCheck checks if port is free on host.
-type PortChecker func(PortTunnel) bool
+type PortChecker func(context.Context, PortTunnel) bool
 
 // PFAnns represents a collection of port forward annotations.
 type PFAnns []*PFAnn
 
 // ToPortSpec returns a container port and local port definitions.
-func (aa PFAnns) ToPortSpec(pp ContainerPortSpecs) (string, string) {
+func (aa PFAnns) ToPortSpec(pp ContainerPortSpecs) (ports, localPorts string) {
 	specs, lps := make([]string, 0, len(aa)), make([]string, 0, len(aa))
 	for _, a := range aa {
 		specs = append(specs, a.AsSpec())
@@ -32,15 +33,15 @@ func (aa PFAnns) ToPortSpec(pp ContainerPortSpecs) (string, string) {
 	return strings.Join(specs, ","), strings.Join(lps, ",")
 }
 
-func (aa PFAnns) ToTunnels(address string, pp ContainerPortSpecs, available PortChecker) (PortTunnels, error) {
+func (aa PFAnns) ToTunnels(address string, _ ContainerPortSpecs, available PortChecker) (PortTunnels, error) {
 	pts := make(PortTunnels, 0, len(aa))
 	for _, a := range aa {
 		pt, err := a.ToTunnel(address)
 		if err != nil {
 			return pts, err
 		}
-		if !available(pt) {
-			return pts, fmt.Errorf("Port %s is not available on host", pt.LocalPort)
+		if !available(context.Background(), pt) {
+			return pts, fmt.Errorf("port %s is not available on host", pt.LocalPort)
 		}
 		pts = append(pts, pt)
 	}

@@ -37,29 +37,30 @@ type (
 // Table represents tabular data.
 type Table struct {
 	*SelectTable
-	gvr         client.GVR
-	sortCol     model1.SortColumn
-	manualSort  bool
-	Path        string
-	Extras      string
-	actions     *KeyActions
-	cmdBuff     *model.FishBuff
-	styles      *config.Styles
-	viewSetting *config.ViewSetting
-	colorerFn   model1.ColorerFunc
-	decorateFn  DecorateFunc
-	wide        bool
-	toast       bool
-	hasMetrics  bool
-	ctx         context.Context
-	mx          sync.RWMutex
-	readOnly    bool
-	noIcon      bool
-	fullGVR     bool
+	gvr            *client.GVR
+	sortCol        model1.SortColumn
+	selectedColIdx int
+	manualSort     bool
+	Path           string
+	Extras         string
+	actions        *KeyActions
+	cmdBuff        *model.FishBuff
+	styles         *config.Styles
+	viewSetting    *config.ViewSetting
+	colorerFn      model1.ColorerFunc
+	decorateFn     DecorateFunc
+	wide           bool
+	toast          bool
+	hasMetrics     bool
+	ctx            context.Context
+	mx             sync.RWMutex
+	readOnly       bool
+	noIcon         bool
+	fullGVR        bool
 }
 
 // NewTable returns a new table view.
-func NewTable(gvr client.GVR) *Table {
+func NewTable(gvr *client.GVR) *Table {
 	return &Table{
 		SelectTable: &SelectTable{
 			Table: tview.NewTable(),
@@ -133,6 +134,137 @@ func (t *Table) getMSort() bool {
 	return t.manualSort
 }
 
+func (t *Table) getSelectedColIdx() int {
+	t.mx.RLock()
+	defer t.mx.RUnlock()
+
+	return t.selectedColIdx
+}
+
+// initSelectedColumn initializes the selected column index based on current sort column.
+func (t *Table) initSelectedColumn() {
+	data := t.GetFilteredData()
+	if data == nil || data.HeaderCount() == 0 {
+		return
+	}
+
+	sc := t.getSortCol()
+	if sc.Name == "" {
+		t.mx.Lock()
+		t.selectedColIdx = 0
+		t.mx.Unlock()
+		return
+	}
+
+	// Find the visual column index for the current sort column
+	header := data.Header()
+	visibleCol := 0
+	for _, h := range header {
+		if t.shouldExcludeColumn(h) {
+			continue
+		}
+		if h.Name == sc.Name {
+			t.mx.Lock()
+			t.selectedColIdx = visibleCol
+			t.mx.Unlock()
+			return
+		}
+		visibleCol++
+	}
+
+	// If sort column not found in visible columns, default to 0
+	t.mx.Lock()
+	t.selectedColIdx = 0
+	t.mx.Unlock()
+}
+
+// moveSelectedColumn moves the column selection by delta (-1 for left, +1 for right).
+func (t *Table) moveSelectedColumn(delta int) {
+	data := t.GetFilteredData()
+	if data == nil || data.HeaderCount() == 0 {
+		return
+	}
+
+	// Count visible columns
+	visibleCount := 0
+	for _, h := range data.Header() {
+		if !t.shouldExcludeColumn(h) {
+			visibleCount++
+		}
+	}
+
+	if visibleCount == 0 {
+		return
+	}
+
+	t.mx.Lock()
+	t.selectedColIdx += delta
+	// Wrap around
+	if t.selectedColIdx >= visibleCount {
+		t.selectedColIdx = 0
+	} else if t.selectedColIdx < 0 {
+		t.selectedColIdx = visibleCount - 1
+	}
+	t.mx.Unlock()
+
+	t.Refresh()
+}
+
+// SelectNextColumn moves the column selection to the right.
+func (t *Table) SelectNextColumn() {
+	t.moveSelectedColumn(1)
+}
+
+// SelectPrevColumn moves the column selection to the left.
+func (t *Table) SelectPrevColumn() {
+	t.moveSelectedColumn(-1)
+}
+
+// SortSelectedColumn sorts by the currently selected column.
+func (t *Table) SortSelectedColumn() {
+	data := t.GetFilteredData()
+	if data == nil || data.HeaderCount() == 0 {
+		return
+	}
+
+	idx := t.getSelectedColIdx()
+	if idx < 0 {
+		return
+	}
+
+	// Map visual column index to actual header column name
+	// (accounting for hidden columns)
+	header := data.Header()
+	visibleCol := 0
+	var colName string
+	for _, h := range header {
+		if t.shouldExcludeColumn(h) {
+			continue
+		}
+		if visibleCol == idx {
+			colName = h.Name
+			break
+		}
+		visibleCol++
+	}
+
+	if colName == "" {
+		return
+	}
+
+	sc := t.getSortCol()
+
+	// Toggle direction if same column, otherwise default to ascending
+	asc := true
+	if sc.Name == colName {
+		asc = !sc.ASC
+	}
+
+	t.SetSortCol(colName, asc)
+	t.setMSort(true)
+	t.Refresh()
+}
+
 // SetViewSetting sets custom view config is present.
 func (t *Table) SetViewSetting(vs *config.ViewSetting) bool {
 	t.mx.Lock()
@@ -140,6 +272,7 @@ func (t *Table) SetViewSetting(vs *config.ViewSetting) bool {
 
 	if !t.viewSetting.Equals(vs) {
 		t.viewSetting = vs
+		slog.Debug("Updating custom view setting", slogs.GVR, t.gvr, slogs.ViewSetting, vs)
 		t.model.SetViewSetting(t.ctx, vs)
 		return true
 	}
@@ -178,7 +311,7 @@ func (t *Table) Init(ctx context.Context) {
 }
 
 // GVR returns a resource descriptor.
-func (t *Table) GVR() client.GVR { return t.gvr }
+func (t *Table) GVR() *client.GVR { return t.gvr }
 
 // ViewSettingsChanged notifies listener the view configuration changed.
 func (t *Table) ViewSettingsChanged(vs *config.ViewSetting) {
@@ -250,7 +383,7 @@ func (t *Table) FilterInput(r rune) bool {
 }
 
 // Filter filters out table data.
-func (t *Table) Filter(q string) {
+func (t *Table) Filter(string) {
 	t.ClearSelection()
 	t.doUpdate(t.filtered(t.GetModel().Peek()))
 	t.UpdateTitle()
@@ -263,7 +396,7 @@ func (t *Table) Hints() model.MenuHints {
 }
 
 // ExtraHints returns additional hints.
-func (t *Table) ExtraHints() map[string]string {
+func (*Table) ExtraHints() map[string]string {
 	return nil
 }
 
@@ -315,9 +448,24 @@ func (t *Table) doUpdate(data *model1.TableData) *model1.TableData {
 		t.actions.Delete(KeyShiftP)
 	}
 
+	oldSortCol := t.getSortCol()
 	t.setSortCol(data.ComputeSortCol(t.GetViewSetting(), t.getSortCol(), t.getMSort()))
 
+	// Initialize selected column index to match the current sort column
+	// This ensures the highlight starts at the sorted column
+	newSortCol := t.getSortCol()
+	if oldSortCol.Name != newSortCol.Name {
+		t.initSelectedColumn()
+	}
+
 	return data
+}
+
+func (t *Table) shouldExcludeColumn(h model1.HeaderColumn) bool {
+	return (h.Hide || (!t.wide && h.Wide)) ||
+		(h.Name == "NAMESPACE" && !t.GetModel().ClusterWide()) ||
+		(h.MX && !t.hasMetrics) ||
+		(h.VS && vul.ImgScanner == nil)
 }
 
 func (t *Table) UpdateUI(cdata, data *model1.TableData) {
@@ -327,19 +475,9 @@ func (t *Table) UpdateUI(cdata, data *model1.TableData) {
 
 	var col int
 	for _, h := range cdata.Header() {
-		if h.Hide || (!t.wide && h.Wide) {
+		if t.shouldExcludeColumn(h) {
 			continue
 		}
-		if h.Name == "NAMESPACE" && !t.GetModel().ClusterWide() {
-			continue
-		}
-		if h.MX && !t.hasMetrics {
-			continue
-		}
-		if h.VS && vul.ImgScanner == nil {
-			continue
-		}
-
 		t.AddHeaderCell(col, h)
 		c := t.GetCell(0, col)
 		c.SetBackgroundColor(bg)
@@ -383,17 +521,7 @@ func (t *Table) buildRow(r int, re, ore model1.RowEvent, h model1.Header, pads M
 			)
 			continue
 		}
-		if h[c].Hide || (!t.wide && h[c].Wide) {
-			continue
-		}
-
-		if h[c].Name == "NAMESPACE" && !t.GetModel().ClusterWide() {
-			continue
-		}
-		if h[c].MX && !t.hasMetrics {
-			continue
-		}
-		if h[c].VS && vul.ImgScanner == nil {
+		if t.shouldExcludeColumn(h[c]) {
 			continue
 		}
 
@@ -433,7 +561,7 @@ func (t *Table) buildRow(r int, re, ore model1.RowEvent, h model1.Header, pads M
 
 // SortColCmd designates a sorted column.
 func (t *Table) SortColCmd(name string, asc bool) func(evt *tcell.EventKey) *tcell.EventKey {
-	return func(evt *tcell.EventKey) *tcell.EventKey {
+	return func(*tcell.EventKey) *tcell.EventKey {
 		sc := t.getSortCol()
 		sc.ASC = !sc.ASC
 		if sc.Name != name {
@@ -442,13 +570,17 @@ func (t *Table) SortColCmd(name string, asc bool) func(evt *tcell.EventKey) *tce
 		sc.Name = name
 		t.setSortCol(sc)
 		t.setMSort(true)
+
+		// Sync selected column index with the new sort column
+		t.initSelectedColumn()
+
 		t.Refresh()
 		return nil
 	}
 }
 
 // SortInvertCmd reverses sorting order.
-func (t *Table) SortInvertCmd(evt *tcell.EventKey) *tcell.EventKey {
+func (t *Table) SortInvertCmd(*tcell.EventKey) *tcell.EventKey {
 	t.toggleSortCol()
 	t.Refresh()
 
@@ -467,7 +599,6 @@ func (t *Table) Refresh() {
 	if data.HeaderCount() == 0 {
 		return
 	}
-	// BOZO!! Really want to tell model reload now. Refactor!
 	cdata := t.Update(data, t.hasMetrics)
 	t.UpdateUI(cdata, data)
 }
@@ -500,7 +631,9 @@ func (t *Table) NameColIndex() int {
 func (t *Table) AddHeaderCell(col int, h model1.HeaderColumn) {
 	sc := t.getSortCol()
 	sortCol := h.Name == sc.Name
-	c := tview.NewTableCell(sortIndicator(sortCol, sc.ASC, t.styles.Table(), h.Name))
+	selectedCol := col == t.getSelectedColIdx()
+	styles := t.styles.Table()
+	c := tview.NewTableCell(columnIndicator(sortCol, selectedCol, sc.ASC, &styles, h.Name))
 	c.SetExpansion(1)
 	c.SetSelectable(false)
 	c.SetAlign(h.Align)
@@ -523,7 +656,7 @@ func (t *Table) CmdBuff() *model.FishBuff {
 func (t *Table) ShowDeleted() {
 	r, _ := t.GetSelection()
 	cols := t.GetColumnCount()
-	for x := 0; x < cols; x++ {
+	for x := range cols {
 		t.GetCell(r, x).SetAttributes(tcell.AttrDim)
 	}
 }
@@ -561,28 +694,31 @@ func (t *Table) styleTitle() string {
 		resource = t.gvr.String()
 	}
 
-	var title string
+	var (
+		title  string
+		styles = t.styles.Frame()
+	)
 	if ns == client.ClusterScope {
-		title = SkinTitle(fmt.Sprintf(TitleFmt, resource, render.AsThousands(rc)), t.styles.Frame())
+		title = SkinTitle(fmt.Sprintf(TitleFmt, resource, render.AsThousands(rc)), &styles)
 	} else {
-		title = SkinTitle(fmt.Sprintf(NSTitleFmt, resource, ns, render.AsThousands(rc)), t.styles.Frame())
-	}
-	if ic := ROIndicator(t.readOnly, t.noIcon); ic != "" {
-		title = " " + ic + title
+		title = SkinTitle(fmt.Sprintf(NSTitleFmt, resource, ns, render.AsThousands(rc)), &styles)
 	}
 
 	buff := t.cmdBuff.GetText()
 	if internal.IsLabelSelector(buff) {
-		buff = render.Truncate(TrimLabelSelector(buff), maxTruncate)
-	} else if l := t.GetModel().GetLabelFilter(); l != "" {
-		buff = render.Truncate(l, maxTruncate)
+		if sel, err := ExtractLabelSelector(buff); err == nil {
+			buff = render.Truncate(sel.String(), maxTruncate)
+		}
+	} else if l := t.GetModel().GetLabelSelector(); l != nil && !l.Empty() {
+		buff = render.Truncate(l.String(), maxTruncate)
+	} else if buff != "" {
+		buff = render.Truncate(buff, maxTruncate)
 	}
-
 	if buff == "" {
 		return title
 	}
 
-	return title + SkinTitle(fmt.Sprintf(SearchFmt, buff), t.styles.Frame())
+	return title + SkinTitle(fmt.Sprintf(SearchFmt, buff), &styles)
 }
 
 // ROIndicator returns an icon showing whether the session is in readonly mode or not.

@@ -5,12 +5,11 @@ package view
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/signal"
-	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -93,7 +92,7 @@ func (a *App) ConOK() bool {
 }
 
 // Init initializes the application.
-func (a *App) Init(version string, rate int) error {
+func (a *App) Init(version string, _ int) error {
 	a.version = model.NormalizeVersion(version)
 
 	ctx := context.WithValue(context.Background(), internal.KeyApp, a)
@@ -106,20 +105,21 @@ func (a *App) Init(version string, rate int) error {
 	a.App.Init()
 	a.SetInputCapture(a.keyboard)
 	a.bindKeys()
-	if a.Conn() == nil {
-		return errors.New("no client connection detected")
-	}
-	ns := a.Config.ActiveNamespace()
 
-	a.factory = watch.NewFactory(a.Conn())
-	a.initFactory(ns)
+	// Allow initialization even without a valid connection
+	// We'll fall back to context view in defaultCmd
+	if a.Conn() != nil {
+		ns := a.Config.ActiveNamespace()
+		a.factory = watch.NewFactory(a.Conn())
+		a.initFactory(ns)
 
-	a.clusterModel = model.NewClusterInfo(a.factory, a.version, a.Config.K9s)
-	a.clusterModel.AddListener(a.clusterInfo())
-	a.clusterModel.AddListener(a.statusIndicator())
-	if a.Conn().ConnectionOK() {
-		a.clusterModel.Refresh()
-		a.clusterInfo().Init()
+		a.clusterModel = model.NewClusterInfo(a.factory, a.version, a.Config.K9s)
+		a.clusterModel.AddListener(a.clusterInfo())
+		a.clusterModel.AddListener(a.statusIndicator())
+		if a.Conn().ConnectionOK() {
+			a.clusterModel.Refresh()
+			a.clusterInfo().Init()
+		}
 	}
 
 	a.command = NewCommand(a)
@@ -139,10 +139,15 @@ func (a *App) Init(version string, rate int) error {
 	return nil
 }
 
-func (a *App) stopImgScanner() {
+func (*App) stopImgScanner() {
 	if vul.ImgScanner != nil {
 		vul.ImgScanner.Stop()
 	}
+}
+
+func (a *App) clearHistory() {
+	a.cmdHistory.Clear()
+	a.filterHistory.Clear()
 }
 
 func (a *App) initImgScanner(version string) {
@@ -173,7 +178,7 @@ func (a *App) layout(ctx context.Context) {
 	}
 }
 
-func (a *App) initSignals() {
+func (*App) initSignals() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGHUP)
 
@@ -198,8 +203,8 @@ func (a *App) suggestCommand() model.SuggestionFunc {
 		}
 
 		ls := strings.ToLower(s)
-		for _, k := range a.command.alias.Keys() {
-			if suggest, ok := cmd.ShouldAddSuggest(ls, k); ok {
+		for alias := range maps.Keys(a.command.alias.Alias) {
+			if suggest, ok := cmd.ShouldAddSuggest(ls, alias); ok {
 				entries = append(entries, suggest)
 			}
 		}
@@ -218,6 +223,10 @@ func (a *App) suggestCommand() model.SuggestionFunc {
 }
 
 func (a *App) contextNames() ([]string, error) {
+	// Return empty list if no factory
+	if a.factory == nil {
+		return []string{}, nil
+	}
 	contexts, err := a.factory.Client().Config().Contexts()
 	if err != nil {
 		return nil, err
@@ -240,9 +249,8 @@ func (a *App) keyboard(evt *tcell.EventKey) *tcell.EventKey {
 
 func (a *App) bindKeys() {
 	a.AddActions(ui.NewKeyActionsFromMap(ui.KeyMap{
-		ui.KeyShift9:       ui.NewSharedKeyAction("DumpGOR", a.dumpGOR, false),
 		tcell.KeyCtrlE:     ui.NewSharedKeyAction("ToggleHeader", a.toggleHeaderCmd, false),
-		tcell.KeyCtrlG:     ui.NewSharedKeyAction("toggleCrumbs", a.toggleCrumbsCmd, false),
+		tcell.KeyCtrlG:     ui.NewSharedKeyAction("ToggleCrumbs", a.toggleCrumbsCmd, false),
 		ui.KeyHelp:         ui.NewSharedKeyAction("Help", a.helpCmd, false),
 		ui.KeyLeftBracket:  ui.NewSharedKeyAction("Go Back", a.previousCommand, false),
 		ui.KeyRightBracket: ui.NewSharedKeyAction("Go Forward", a.nextCommand, false),
@@ -251,15 +259,6 @@ func (a *App) bindKeys() {
 		tcell.KeyEnter:     ui.NewKeyAction("Goto", a.gotoCmd, false),
 		tcell.KeyCtrlC:     ui.NewKeyAction("Quit", a.quitCmd, false),
 	}))
-}
-
-func (a *App) dumpGOR(evt *tcell.EventKey) *tcell.EventKey {
-	slog.Debug("GOR", slogs.GOR, runtime.NumGoroutine())
-	bb := make([]byte, 5_000_000)
-	runtime.Stack(bb, true)
-	slog.Debug("GOR stack", slogs.Stack, string(bb))
-
-	return evt
 }
 
 // ActiveView returns the currently active view.
@@ -308,7 +307,7 @@ func (a *App) buildHeader() tview.Primitive {
 	}
 
 	clWidth := clusterInfoWidth
-	if a.Conn().ConnectionOK() {
+	if a.Conn() != nil && a.Conn().ConnectionOK() {
 		n, err := a.Conn().Config().CurrentClusterName()
 		if err == nil {
 			size := len(n) + clusterInfoPad
@@ -356,6 +355,11 @@ func (a *App) Resume() {
 }
 
 func (a *App) clusterUpdater(ctx context.Context) {
+	if a.Conn() == nil || !a.Conn().ConnectionOK() || a.factory == nil || a.clusterModel == nil {
+		slog.Debug("Skipping cluster updater - no valid connection")
+		return
+	}
+
 	if err := a.refreshCluster(ctx); err != nil {
 		slog.Error("Cluster updater failed!", slogs.Error, err)
 		return
@@ -384,6 +388,10 @@ func (a *App) clusterUpdater(ctx context.Context) {
 }
 
 func (a *App) refreshCluster(context.Context) error {
+	if a.Conn() == nil || a.factory == nil || a.clusterModel == nil {
+		return nil
+	}
+
 	c := a.Content.Top()
 	if ok := a.Conn().CheckConnectivity(); ok {
 		if atomic.LoadInt32(&a.conRetry) > 0 {
@@ -401,7 +409,7 @@ func (a *App) refreshCluster(context.Context) error {
 		c.Stop()
 	}
 
-	count, maxConnRetry := atomic.LoadInt32(&a.conRetry), int32(a.Config.K9s.MaxConnRetry)
+	count, maxConnRetry := atomic.LoadInt32(&a.conRetry), a.Config.K9s.MaxConnRetry
 	if count >= maxConnRetry {
 		slog.Error("Conn check failed. Bailing out!",
 			slogs.Retry, count,
@@ -465,7 +473,7 @@ func (a *App) switchContext(ci *cmd.Interpreter, force bool) error {
 		p := cmd.NewInterpreter(a.Config.ActiveView())
 		p.ResetContextArg()
 		if p.IsContextCmd() {
-			a.Config.SetActiveView("pod")
+			a.Config.SetActiveView(client.PodGVR.String())
 		}
 		ns := a.Config.ActiveNamespace()
 		if !a.Conn().IsValidNamespace(ns) {
@@ -479,7 +487,18 @@ func (a *App) switchContext(ci *cmd.Interpreter, force bool) error {
 		if err := a.Config.Save(true); err != nil {
 			slog.Error("Fail to save config to disk", slogs.Subsys, "config", slogs.Error, err)
 		}
-		a.initFactory(ns)
+
+		if a.factory == nil && a.Conn() != nil {
+			a.factory = watch.NewFactory(a.Conn())
+			a.clusterModel = model.NewClusterInfo(a.factory, a.version, a.Config.K9s)
+			a.clusterModel.AddListener(a.clusterInfo())
+			a.clusterModel.AddListener(a.statusIndicator())
+		}
+
+		if a.factory != nil {
+			a.initFactory(ns)
+		}
+
 		if err := a.command.Reset(a.Config.ContextAliasesPath(), true); err != nil {
 			return err
 		}
@@ -492,7 +511,10 @@ func (a *App) switchContext(ci *cmd.Interpreter, force bool) error {
 		a.Flash().Infof("Switching context to %q::%q", contextName, ns)
 		a.ReloadStyles()
 		a.gotoResource(a.Config.ActiveView(), "", true, true)
-		a.clusterModel.Reset(a.factory)
+
+		if a.clusterModel != nil {
+			a.clusterModel.Reset(a.factory)
+		}
 	}
 
 	return nil
@@ -601,7 +623,7 @@ func (a *App) setIndicator(l model.FlashLevel, msg string) {
 }
 
 // PrevCmd pops the command stack.
-func (a *App) PrevCmd(evt *tcell.EventKey) *tcell.EventKey {
+func (a *App) PrevCmd(*tcell.EventKey) *tcell.EventKey {
 	if !a.Content.IsLast() {
 		a.Content.Pop()
 	}
@@ -646,7 +668,8 @@ func (a *App) gotoCmd(evt *tcell.EventKey) *tcell.EventKey {
 }
 
 func (a *App) cowCmd(msg string) {
-	dialog.ShowError(a.Styles.Dialog(), a.Content.Pages, msg)
+	d := a.Styles.Dialog()
+	dialog.ShowError(&d, a.Content.Pages, msg)
 }
 
 func (a *App) dirCmd(path string, pushCmd bool) error {
@@ -669,15 +692,18 @@ func (a *App) dirCmd(path string, pushCmd bool) error {
 }
 
 func (a *App) quitCmd(evt *tcell.EventKey) *tcell.EventKey {
+	noExit := a.Config.K9s.NoExitOnCtrlC
 	if a.InCmdMode() {
+		if isBailoutEvt(evt) && noExit {
+			return nil
+		}
 		return evt
 	}
 
-	if !a.Config.K9s.NoExitOnCtrlC {
+	if !noExit {
 		a.BailOut(0)
 	}
 
-	// overwrite the default ctrl-c behavior of tview
 	return nil
 }
 
@@ -705,12 +731,12 @@ func (a *App) previousCommand(evt *tcell.EventKey) *tcell.EventKey {
 	if evt != nil && evt.Rune() == rune(ui.KeyLeftBracket) && a.Prompt().InCmdMode() {
 		return evt
 	}
-	cmds := a.cmdHistory.List()
-	if !a.cmdHistory.Back() {
+	c, ok := a.cmdHistory.Back()
+	if !ok {
 		a.App.Flash().Warn("Can't go back any further")
 		return evt
 	}
-	a.gotoResource(cmds[a.cmdHistory.CurrentIndex()], "", true, false)
+	a.gotoResource(c, "", true, false)
 	return nil
 }
 
@@ -719,14 +745,14 @@ func (a *App) nextCommand(evt *tcell.EventKey) *tcell.EventKey {
 	if evt != nil && evt.Rune() == rune(ui.KeyRightBracket) && a.Prompt().InCmdMode() {
 		return evt
 	}
-	cmds := a.cmdHistory.List()
-	if !a.cmdHistory.Forward() {
+	c, ok := a.cmdHistory.Forward()
+	if !ok {
 		a.App.Flash().Warn("Can't go forward any further")
 		return evt
 	}
 	// We go to the resource before updating the history so that
 	// gotoResource doesn't add this command to the history
-	a.gotoResource(cmds[a.cmdHistory.CurrentIndex()], "", true, false)
+	a.gotoResource(c, "", true, false)
 	return nil
 }
 
@@ -735,34 +761,34 @@ func (a *App) lastCommand(evt *tcell.EventKey) *tcell.EventKey {
 	if evt != nil && evt.Rune() == ui.KeyDash && a.Prompt().InCmdMode() {
 		return evt
 	}
-	cmds := a.cmdHistory.List()
-	if len(cmds) < 1 {
+	c, ok := a.cmdHistory.Top()
+	if !ok {
 		a.App.Flash().Warn("No previous view to switch to")
 		return evt
-	} else {
-		a.cmdHistory.Last()
-		a.gotoResource(cmds[a.cmdHistory.CurrentIndex()], "", true, false)
 	}
+	a.gotoResource(c, "", true, false)
+
 	return nil
 }
 
-func (a *App) aliasCmd(evt *tcell.EventKey) *tcell.EventKey {
+func (a *App) aliasCmd(*tcell.EventKey) *tcell.EventKey {
 	if a.Content.Top() != nil && a.Content.Top().Name() == aliasTitle {
 		a.Content.Pop()
 		return nil
 	}
 
-	if err := a.inject(NewAlias(client.NewGVR("aliases")), false); err != nil {
+	if err := a.inject(NewAlias(client.AliGVR), false); err != nil {
 		a.Flash().Err(err)
 	}
 
 	return nil
 }
 
-func (a *App) gotoResource(c, path string, clearStack bool, pushCmd bool) {
+func (a *App) gotoResource(c, path string, clearStack, pushCmd bool) {
 	err := a.command.run(cmd.NewInterpreter(c), path, clearStack, pushCmd)
 	if err != nil {
-		dialog.ShowError(a.Styles.Dialog(), a.Content.Pages, err.Error())
+		d := a.Styles.Dialog()
+		dialog.ShowError(&d, a.Content.Pages, err.Error())
 	}
 }
 

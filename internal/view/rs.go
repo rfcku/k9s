@@ -19,7 +19,7 @@ type ReplicaSet struct {
 }
 
 // NewReplicaSet returns a new viewer.
-func NewReplicaSet(gvr client.GVR) ResourceViewer {
+func NewReplicaSet(gvr *client.GVR) ResourceViewer {
 	r := ReplicaSet{
 		ResourceViewer: NewOwnerExtender(
 			NewVulnerabilityExtender(
@@ -35,14 +35,11 @@ func NewReplicaSet(gvr client.GVR) ResourceViewer {
 
 func (r *ReplicaSet) bindKeys(aa *ui.KeyActions) {
 	aa.Bulk(ui.KeyMap{
-		ui.KeyShiftD:   ui.NewKeyAction("Sort Desired", r.GetTable().SortColCmd("DESIRED", true), false),
-		ui.KeyShiftC:   ui.NewKeyAction("Sort Current", r.GetTable().SortColCmd("CURRENT", true), false),
-		ui.KeyShiftR:   ui.NewKeyAction("Sort Ready", r.GetTable().SortColCmd(readyCol, true), false),
 		tcell.KeyCtrlL: ui.NewKeyAction("Rollback", r.rollbackCmd, true),
 	})
 }
 
-func (r *ReplicaSet) showPods(app *App, _ ui.Tabular, _ client.GVR, path string) {
+func (*ReplicaSet) showPods(app *App, _ ui.Tabular, _ *client.GVR, path string) {
 	var drs dao.ReplicaSet
 	rs, err := drs.Load(app.factory, path)
 	if err != nil {
@@ -61,7 +58,8 @@ func (r *ReplicaSet) rollbackCmd(evt *tcell.EventKey) *tcell.EventKey {
 
 	msg := fmt.Sprintf("Rollback %s %s?", r.GVR(), path)
 
-	dialog.ShowConfirm(r.App().Styles.Dialog(), r.App().Content.Pages, "Rollback", msg, func() {
+	d := r.App().Styles.Dialog()
+	dialog.ShowConfirm(&d, r.App().Content.Pages, "Rollback", msg, func() {
 		r.App().Flash().Infof("Rolling back %s %s", r.GVR(), path)
 		var drs dao.ReplicaSet
 		drs.Init(r.App().factory, r.GVR())

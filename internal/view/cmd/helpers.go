@@ -10,23 +10,46 @@ import (
 	"github.com/derailed/k9s/internal/client"
 )
 
+// ToLabels converts a string into a map of labels.
 func ToLabels(s string) map[string]string {
 	var (
 		ll   = strings.Split(s, ",")
 		lbls = make(map[string]string, len(ll))
 	)
 	for _, l := range ll {
-		kv := strings.Split(l, "=")
-		if len(kv) < 2 || kv[0] == "" || kv[1] == "" {
+		if k, v, ok := splitKv(l); ok {
+			lbls[k] = v
+		} else {
 			continue
 		}
-		lbls[kv[0]] = kv[1]
 	}
 	if len(lbls) == 0 {
 		return nil
 	}
 
 	return lbls
+}
+
+func splitKv(s string) (k, v string, ok bool) {
+	switch {
+	case strings.Contains(s, labelFlagNotEq):
+		kv := strings.SplitN(s, labelFlagNotEq, 2)
+		if len(kv) == 2 && kv[0] != "" && kv[1] != "" {
+			return strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]), true
+		}
+	case strings.Contains(s, labelFlagEqs):
+		kv := strings.SplitN(s, labelFlagEqs, 2)
+		if len(kv) == 2 && kv[0] != "" && kv[1] != "" {
+			return strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]), true
+		}
+	case strings.Contains(s, labelFlagEq):
+		kv := strings.SplitN(s, labelFlagEq, 2)
+		if len(kv) == 2 && kv[0] != "" && kv[1] != "" {
+			return strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]), true
+		}
+	}
+
+	return "", "", false
 }
 
 // ShouldAddSuggest checks if a suggestion match the given command.
@@ -43,17 +66,7 @@ func SuggestSubCommand(command string, namespaces client.NamespaceNames, context
 	p := NewInterpreter(command)
 	var suggests []string
 	switch {
-	case p.IsCowCmd():
-		fallthrough
-	case p.IsHelpCmd():
-		fallthrough
-	case p.IsAliasCmd():
-		fallthrough
-	case p.IsBailCmd():
-		fallthrough
-	case p.IsDirCmd():
-		fallthrough
-	case p.IsAliasCmd():
+	case p.IsCowCmd(), p.IsHelpCmd(), p.IsAliasCmd(), p.IsBailCmd(), p.IsDirCmd():
 		return nil
 
 	case p.IsXrayCmd():
@@ -68,11 +81,11 @@ func SuggestSubCommand(command string, namespaces client.NamespaceNames, context
 		if !ok {
 			return nil
 		}
-		suggests = completeCtx(n, contexts)
+		suggests = completeCtx(command, n, contexts)
 
 	case p.HasNS():
 		if n, ok := p.HasContext(); ok {
-			suggests = completeCtx(n, contexts)
+			suggests = completeCtx(command, n, contexts)
 		}
 		if len(suggests) > 0 {
 			break
@@ -86,7 +99,7 @@ func SuggestSubCommand(command string, namespaces client.NamespaceNames, context
 
 	default:
 		if n, ok := p.HasContext(); ok {
-			suggests = completeCtx(n, contexts)
+			suggests = completeCtx(command, n, contexts)
 		}
 	}
 	slices.Sort(suggests)
@@ -109,11 +122,11 @@ func completeNS(s string, nn client.NamespaceNames) []string {
 	return suggests
 }
 
-func completeCtx(s string, cc []string) []string {
+func completeCtx(command, s string, contexts []string) []string {
 	var suggests []string
-	for _, ctxName := range cc {
+	for _, ctxName := range contexts {
 		if suggest, ok := ShouldAddSuggest(s, ctxName); ok {
-			if len(s) == 0 {
+			if s == "" && !strings.HasSuffix(command, " ") {
 				suggests = append(suggests, " "+suggest)
 				continue
 			}

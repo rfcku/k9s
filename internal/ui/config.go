@@ -83,6 +83,7 @@ func (c *Configurator) CustomViewsWatcher(ctx context.Context, s synchronizer) e
 	if err := w.Add(config.AppViewsFile); err != nil {
 		return err
 	}
+	slog.Debug("Loading custom views", slogs.FileName, config.AppViewsFile)
 
 	return c.RefreshCustomViews()
 }
@@ -182,7 +183,7 @@ func (c *Configurator) ConfigWatcher(ctx context.Context, s synchronizer) error 
 	if !ok {
 		return nil
 	}
-	ctConfigFile := filepath.Join(config.AppContextConfig(cl, ct))
+	ctConfigFile := config.AppContextConfig(cl, ct)
 	slog.Debug("ConfigWatcher watching", slogs.FileName, ctConfigFile)
 
 	return w.Add(ctConfigFile)
@@ -194,6 +195,14 @@ func (c *Configurator) activeSkin() (string, bool) {
 		return skin, false
 	}
 
+	if env_skin := os.Getenv("K9S_SKIN"); env_skin != "" {
+		if _, err := os.Stat(config.SkinFileFromName(env_skin)); err == nil {
+			skin = env_skin
+			slog.Debug("Loading env skin", slogs.Skin, skin)
+			return skin, true
+		}
+	}
+
 	if ct, err := c.Config.K9s.ActiveContext(); err == nil && ct.Skin != "" {
 		if _, err := os.Stat(config.SkinFileFromName(ct.Skin)); err == nil {
 			skin = ct.Skin
@@ -201,20 +210,22 @@ func (c *Configurator) activeSkin() (string, bool) {
 				slogs.Skin, skin,
 				slogs.Context, c.Config.K9s.ActiveContextName(),
 			)
+			return skin, true
 		}
 	}
 
-	if sk := c.Config.K9s.UI.Skin; skin == "" && sk != "" {
+	if sk := c.Config.K9s.UI.Skin; sk != "" {
 		if _, err := os.Stat(config.SkinFileFromName(sk)); err == nil {
 			skin = sk
 			slog.Debug("Loading global skin", slogs.Skin, skin)
+			return skin, true
 		}
 	}
 
 	return skin, skin != ""
 }
 
-func (c *Configurator) activeConfig() (cluster string, context string, ok bool) {
+func (c *Configurator) activeConfig() (cluster, contxt string, ok bool) {
 	if c.Config == nil || c.Config.K9s == nil {
 		return
 	}
@@ -222,8 +233,8 @@ func (c *Configurator) activeConfig() (cluster string, context string, ok bool) 
 	if err != nil {
 		return
 	}
-	cluster, context = ct.GetClusterName(), c.Config.K9s.ActiveContextName()
-	if cluster != "" && context != "" {
+	cluster, contxt = ct.GetClusterName(), c.Config.K9s.ActiveContextName()
+	if cluster != "" && contxt != "" {
 		ok = true
 	}
 
@@ -254,40 +265,41 @@ func (c *Configurator) RefreshStyles(s synchronizer) {
 	}
 }
 
-func (c *Configurator) loadSkinFile(s synchronizer) {
+func (c *Configurator) loadSkinFile(synchronizer) {
+	invert := c.Config.K9s.IsInvert()
 	skin, ok := c.activeSkin()
 	if !ok {
 		slog.Debug("No custom skin found. Using stock skin")
-		c.updateStyles("")
+		c.updateStyles("", invert)
 		return
 	}
 
 	skinFile := config.SkinFileFromName(skin)
 	slog.Debug("Loading skin file", slogs.Skin, skinFile)
-	if err := c.Styles.Load(skinFile); err != nil {
+	if err := c.Styles.Load(skinFile, invert); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.Warn("Skin file not found in skins dir",
 				slogs.Skin, filepath.Base(skinFile),
 				slogs.Dir, config.AppSkinsDir,
 				slogs.Error, err,
 			)
-			c.updateStyles("")
+			c.updateStyles("", invert)
 		} else {
 			slog.Error("Failed to parse skin file",
 				slogs.Path, filepath.Base(skinFile),
 				slogs.Error, err,
 			)
-			c.updateStyles(skinFile)
+			c.updateStyles(skinFile, invert)
 		}
 	} else {
-		c.updateStyles(skinFile)
+		c.updateStyles(skinFile, invert)
 	}
 }
 
-func (c *Configurator) updateStyles(f string) {
+func (c *Configurator) updateStyles(f string, invert bool) {
 	c.skinFile = f
 	if f == "" {
-		c.Styles.Reset()
+		c.Styles.Reset(invert)
 	}
 	c.Styles.Update()
 

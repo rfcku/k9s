@@ -15,6 +15,7 @@ import (
 	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
 	"github.com/stretchr/testify/assert"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 func init() {
@@ -51,13 +52,13 @@ func (c) InputHandler() func(*tcell.EventKey, func(tview.Primitive)) { return ni
 func (c) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 	return nil
 }
-func (c) SetRect(int, int, int, int)       {}
-func (c) GetRect() (int, int, int, int)    { return 0, 0, 0, 0 }
-func (c c) GetFocusable() tview.Focusable  { return c }
-func (c) Focus(func(tview.Primitive))      {}
-func (c) Blur()                            {}
-func (c) Start()                           {}
-func (c) Stop()                            {}
-func (c) Init(context.Context) error       { return nil }
-func (c) SetFilter(string)                 {}
-func (c) SetLabelFilter(map[string]string) {}
+func (c) SetRect(int, int, int, int)             {}
+func (c) GetRect() (a, b, c, d int)              { return 0, 0, 0, 0 }
+func (c c) GetFocusable() tview.Focusable        { return c }
+func (c) Focus(func(tview.Primitive))            {}
+func (c) Blur()                                  {}
+func (c) Start()                                 {}
+func (c) Stop()                                  {}
+func (c) Init(context.Context) error             { return nil }
+func (c) SetFilter(string, bool)                 {}
+func (c) SetLabelSelector(labels.Selector, bool) {}

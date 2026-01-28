@@ -18,7 +18,7 @@ type Group struct {
 }
 
 // NewGroup returns a new subject viewer.
-func NewGroup(gvr client.GVR) ResourceViewer {
+func NewGroup(gvr *client.GVR) ResourceViewer {
 	g := Group{ResourceViewer: NewBrowser(gvr)}
 	g.AddBindKeysFn(g.bindKeys)
 	g.SetContextFn(g.subjectCtx)
@@ -30,11 +30,10 @@ func (g *Group) bindKeys(aa *ui.KeyActions) {
 	aa.Delete(ui.KeyShiftA, ui.KeyShiftP, tcell.KeyCtrlSpace, ui.KeySpace)
 	aa.Bulk(ui.KeyMap{
 		tcell.KeyEnter: ui.NewKeyAction("Rules", g.policyCmd, true),
-		ui.KeyShiftK:   ui.NewKeyAction("Sort Kind", g.GetTable().SortColCmd("KIND", true), false),
 	})
 }
 
-func (g *Group) subjectCtx(ctx context.Context) context.Context {
+func (*Group) subjectCtx(ctx context.Context) context.Context {
 	return context.WithValue(ctx, internal.KeySubjectKind, "Group")
 }
 

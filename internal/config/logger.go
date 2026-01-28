@@ -8,7 +8,7 @@ const (
 	DefaultLoggerTailCount = 100
 
 	// MaxLogThreshold sets the max value for log size.
-	MaxLogThreshold = 5000
+	MaxLogThreshold = 5_000
 
 	// DefaultSinceSeconds tracks default log age.
 	DefaultSinceSeconds = -1 // tail logs by default
@@ -21,6 +21,7 @@ type Logger struct {
 	SinceSeconds      int64 `json:"sinceSeconds" yaml:"sinceSeconds"`
 	TextWrap          bool  `json:"textWrap" yaml:"textWrap"`
 	DisableAutoscroll bool  `json:"disableAutoscroll" yaml:"disableAutoscroll"`
+	ColumnLock        bool  `json:"columnLock" yaml:"columnLock"`
 	ShowTime          bool  `json:"showTime" yaml:"showTime"`
 }
 

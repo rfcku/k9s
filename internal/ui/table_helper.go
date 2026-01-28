@@ -13,6 +13,7 @@ import (
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/config"
 	"github.com/derailed/k9s/internal/slogs"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 const (
@@ -57,17 +58,18 @@ func TrimCell(tv *SelectTable, row, col int) string {
 	return strings.TrimSpace(c.Text)
 }
 
-// TrimLabelSelector extracts label query.
-func TrimLabelSelector(s string) string {
+// ExtractLabelSelector extracts label query.
+func ExtractLabelSelector(s string) (labels.Selector, error) {
+	selStr := s
 	if strings.Index(s, "-l") == 0 {
-		return strings.TrimSpace(s[2:])
+		selStr = strings.TrimSpace(s[2:])
 	}
 
-	return s
+	return labels.Parse(selStr)
 }
 
 // SkinTitle decorates a title.
-func SkinTitle(fmat string, style config.Frame) string {
+func SkinTitle(fmat string, style *config.Frame) string {
 	bgColor := style.Title.BgColor
 	if bgColor == config.DefaultColor {
 		bgColor = config.TransparentColor
@@ -82,16 +84,25 @@ func SkinTitle(fmat string, style config.Frame) string {
 	return fmat
 }
 
-func sortIndicator(sort, asc bool, style config.Table, name string) string {
-	if !sort {
-		return name
+func columnIndicator(sort, selected, asc bool, style *config.Table, name string) string {
+	// Build the column name with selection indicator
+	displayName := name
+	if selected {
+		// Make selected column bold
+		displayName = fmt.Sprintf("[::b]%s[::-]", name)
 	}
 
-	order := descIndicator
-	if asc {
-		order = ascIndicator
+	// Add sort indicator if this column is sorted
+	suffix := ""
+	if sort {
+		order := descIndicator
+		if asc {
+			order = ascIndicator
+		}
+		suffix = fmt.Sprintf("[%s::b]%s[::]", style.Header.SorterColor, order)
 	}
-	return fmt.Sprintf("%s[%s::b]%s[::]", name, style.Header.SorterColor, order)
+
+	return displayName + suffix
 }
 
 func formatCell(field string, padding int) string {

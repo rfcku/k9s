@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
 	"github.com/derailed/k9s/internal/render"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	restclient "k8s.io/client-go/rest"
 	mv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
@@ -38,14 +40,40 @@ var (
 	_ ImageLister     = (*Pod)(nil)
 )
 
+type streamResult int
+
 const (
-	logRetryCount = 20
-	logRetryWait  = 1 * time.Second
+	logRetryCount                  = 20
+	logBackoffInitial              = 500 * time.Millisecond
+	logBackoffMax                  = 30 * time.Second
+	logChannelBuffer               = 50   // Buffer size for log channel to reduce drops
+	streamEOF         streamResult = iota // legit container log close (no retry)
+	streamError                           // retryable error (network, auth, etc.)
+	streamCanceled                        // context canceled
 )
 
 // Pod represents a pod resource.
 type Pod struct {
 	Resource
+}
+
+// shouldStopRetrying checks if we should stop retrying log streaming based on pod status.
+func (p *Pod) shouldStopRetrying(path string) bool {
+	pod, err := p.GetInstance(path)
+	if err != nil {
+		return true
+	}
+
+	if pod.DeletionTimestamp != nil {
+		return true
+	}
+
+	switch pod.Status.Phase {
+	case v1.PodSucceeded, v1.PodFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 // Get returns a resource instance if found, else an error.
@@ -69,7 +97,7 @@ func (p *Pod) Get(ctx context.Context, path string) (runtime.Object, error) {
 }
 
 // ListImages lists container images.
-func (p *Pod) ListImages(ctx context.Context, path string) ([]string, error) {
+func (p *Pod) ListImages(_ context.Context, path string) ([]string, error) {
 	pod, err := p.GetInstance(path)
 	if err != nil {
 		return nil, err
@@ -108,7 +136,7 @@ func (p *Pod) List(ctx context.Context, ns string) ([]runtime.Object, error) {
 			continue
 		}
 
-		spec, ok := u.Object["spec"].(map[string]interface{})
+		spec, ok := u.Object["spec"].(map[string]any)
 		if !ok {
 			return res, fmt.Errorf("expecting interface map but got `%T", o)
 		}
@@ -123,7 +151,7 @@ func (p *Pod) List(ctx context.Context, ns string) ([]runtime.Object, error) {
 // Logs fetch container logs for a given pod and container.
 func (p *Pod) Logs(path string, opts *v1.PodLogOptions) (*restclient.Request, error) {
 	ns, n := client.Namespaced(path)
-	auth, err := p.Client().CanI(ns, "v1/pods:log", n, client.GetAccess)
+	auth, err := p.Client().CanI(ns, client.NewGVR(client.PodGVR.String()+":log"), n, client.GetAccess)
 	if err != nil {
 		return nil, err
 	}
@@ -147,13 +175,13 @@ func (p *Pod) Containers(path string, includeInit bool) ([]string, error) {
 	}
 
 	cc := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
-	for _, c := range pod.Spec.Containers {
-		cc = append(cc, c.Name)
+	for i := range pod.Spec.Containers {
+		cc = append(cc, pod.Spec.Containers[i].Name)
 	}
 
 	if includeInit {
-		for _, c := range pod.Spec.InitContainers {
-			cc = append(cc, c.Name)
+		for i := range pod.Spec.InitContainers {
+			cc = append(cc, pod.Spec.InitContainers[i].Name)
 		}
 	}
 
@@ -161,13 +189,13 @@ func (p *Pod) Containers(path string, includeInit bool) ([]string, error) {
 }
 
 // Pod returns a pod victim by name.
-func (p *Pod) Pod(fqn string) (string, error) {
+func (*Pod) Pod(fqn string) (string, error) {
 	return fqn, nil
 }
 
 // GetInstance returns a pod instance.
 func (p *Pod) GetInstance(fqn string) (*v1.Pod, error) {
-	o, err := p.getFactory().Get(p.gvrStr(), fqn, true, labels.Everything())
+	o, err := p.getFactory().Get(p.gvr, fqn, true, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +215,7 @@ func (p *Pod) TailLogs(ctx context.Context, opts *LogOptions) ([]LogChan, error)
 	if !ok {
 		return nil, errors.New("no factory in context")
 	}
-	o, err := fac.Get(p.gvrStr(), opts.Path, true, labels.Everything())
+	o, err := fac.Get(p.gvr, opts.Path, true, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -201,26 +229,26 @@ func (p *Pod) TailLogs(ctx context.Context, opts *LogOptions) ([]LogChan, error)
 	}
 
 	outs := make([]LogChan, 0, coCounts)
-	if co, ok := GetDefaultContainer(po.ObjectMeta, po.Spec); ok && !opts.AllContainers {
+	if co, ok := GetDefaultContainer(&po.ObjectMeta, &po.Spec); ok && !opts.AllContainers {
 		opts.DefaultContainer = co
 		return append(outs, tailLogs(ctx, p, opts)), nil
 	}
 	if opts.HasContainer() && !opts.AllContainers {
 		return append(outs, tailLogs(ctx, p, opts)), nil
 	}
-	for _, co := range po.Spec.InitContainers {
+	for i := range po.Spec.InitContainers {
 		cfg := opts.Clone()
-		cfg.Container = co.Name
+		cfg.Container = po.Spec.InitContainers[i].Name
 		outs = append(outs, tailLogs(ctx, p, cfg))
 	}
-	for _, co := range po.Spec.Containers {
+	for i := range po.Spec.Containers {
 		cfg := opts.Clone()
-		cfg.Container = co.Name
+		cfg.Container = po.Spec.Containers[i].Name
 		outs = append(outs, tailLogs(ctx, p, cfg))
 	}
-	for _, co := range po.Spec.EphemeralContainers {
+	for i := range po.Spec.EphemeralContainers {
 		cfg := opts.Clone()
-		cfg.Container = co.Name
+		cfg.Container = po.Spec.EphemeralContainers[i].Name
 		outs = append(outs, tailLogs(ctx, p, cfg))
 	}
 
@@ -228,9 +256,9 @@ func (p *Pod) TailLogs(ctx context.Context, opts *LogOptions) ([]LogChan, error)
 }
 
 // ScanSA scans for ServiceAccount refs.
-func (p *Pod) ScanSA(ctx context.Context, fqn string, wait bool) (Refs, error) {
+func (p *Pod) ScanSA(_ context.Context, fqn string, wait bool) (Refs, error) {
 	ns, n := client.Namespaced(fqn)
-	oo, err := p.getFactory().List(p.GVR(), ns, wait, labels.Everything())
+	oo, err := p.getFactory().List(p.gvr, ns, wait, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -258,9 +286,9 @@ func (p *Pod) ScanSA(ctx context.Context, fqn string, wait bool) (Refs, error) {
 }
 
 // Scan scans for cluster resource refs.
-func (p *Pod) Scan(ctx context.Context, gvr client.GVR, fqn string, wait bool) (Refs, error) {
+func (p *Pod) Scan(_ context.Context, gvr *client.GVR, fqn string, wait bool) (Refs, error) {
 	ns, n := client.Namespaced(fqn)
-	oo, err := p.getFactory().List(p.GVR(), ns, wait, labels.Everything())
+	oo, err := p.getFactory().List(p.gvr, ns, wait, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +305,7 @@ func (p *Pod) Scan(ctx context.Context, gvr client.GVR, fqn string, wait bool) (
 			continue
 		}
 		switch gvr {
-		case CmGVR:
+		case client.CmGVR:
 			if !hasConfigMap(&pod.Spec, n) {
 				continue
 			}
@@ -285,7 +313,7 @@ func (p *Pod) Scan(ctx context.Context, gvr client.GVR, fqn string, wait bool) (
 				GVR: p.GVR(),
 				FQN: client.FQN(pod.Namespace, pod.Name),
 			})
-		case SecGVR:
+		case client.SecGVR:
 			found, err := hasSecret(p.Factory, &pod.Spec, pod.Namespace, n, wait)
 			if err != nil {
 				slog.Warn("Locate secret failed",
@@ -301,7 +329,7 @@ func (p *Pod) Scan(ctx context.Context, gvr client.GVR, fqn string, wait bool) (
 				GVR: p.GVR(),
 				FQN: client.FQN(pod.Namespace, pod.Name),
 			})
-		case PvcGVR:
+		case client.PvcGVR:
 			if !hasPVC(&pod.Spec, n) {
 				continue
 			}
@@ -309,7 +337,7 @@ func (p *Pod) Scan(ctx context.Context, gvr client.GVR, fqn string, wait bool) (
 				GVR: p.GVR(),
 				FQN: client.FQN(pod.Namespace, pod.Name),
 			})
-		case PcGVR:
+		case client.PcGVR:
 			if !hasPC(&pod.Spec, n) {
 				continue
 			}
@@ -327,47 +355,112 @@ func (p *Pod) Scan(ctx context.Context, gvr client.GVR, fqn string, wait bool) (
 // Helpers...
 
 func tailLogs(ctx context.Context, logger Logger, opts *LogOptions) LogChan {
-	var (
-		out = make(LogChan, 2)
-		wg  sync.WaitGroup
-	)
+	out := make(LogChan, logChannelBuffer)
+	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		podOpts := opts.ToPodLogOptions()
-		for r := 0; r < logRetryCount; r++ {
+
+		// Setup exponential backoff following project pattern
+		bf := backoff.NewExponentialBackOff()
+		bf.InitialInterval = logBackoffInitial
+		bf.MaxElapsedTime = 0
+		bf.MaxInterval = logBackoffMax / 2
+		backoffCtx := backoff.WithContext(bf, ctx)
+		delay := logBackoffInitial
+
+		for range logRetryCount {
 			req, err := logger.Logs(opts.Path, podOpts)
-			if err == nil {
-				// This call will block if nothing is in the stream!!
-				if stream, e := req.Stream(ctx); e == nil {
-					wg.Add(1)
-					go readLogs(ctx, &wg, stream, out, opts)
-					return
-				} else {
-					slog.Error("Stream logs failed",
-						slogs.Error, e,
-						slogs.Container, opts.Info(),
-					)
-				}
-			} else {
+			if err != nil {
 				slog.Error("Log request failed",
 					slogs.Container, opts.Info(),
 					slogs.Error, err,
 				)
+				// Check if we should stop retrying based on pod status
+				if pod, ok := logger.(*Pod); ok && pod.shouldStopRetrying(opts.Path) {
+					slog.Debug("Stopping log retry - pod is terminating or deleted",
+						slogs.Container, opts.Info(),
+					)
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(delay):
+					if delay = backoffCtx.NextBackOff(); delay == backoff.Stop {
+						return
+					}
+				}
+				continue
 			}
 
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				if err != nil {
-					out <- opts.ToErrLogItem(err)
+			stream, e := req.Stream(ctx)
+			if e != nil {
+				slog.Error("Stream logs failed",
+					slogs.Error, e,
+					slogs.Container, opts.Info(),
+				)
+				// Check if we should stop retrying based on pod status
+				if pod, ok := logger.(*Pod); ok && pod.shouldStopRetrying(opts.Path) {
+					slog.Debug("Stopping log retry - pod is terminating or deleted",
+						slogs.Container, opts.Info(),
+					)
+					return
 				}
-				time.Sleep(logRetryWait)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(delay):
+					if delay = backoffCtx.NextBackOff(); delay == backoff.Stop {
+						return
+					}
+				}
+				continue
 			}
+
+			// Process logs until completion
+			result := readLogs(ctx, stream, out, opts)
+			switch result {
+			case streamEOF:
+				slog.Debug("Log stream ended cleanly",
+					slogs.Container, opts.Info(),
+				)
+				return
+			case streamError:
+				// Check if we should stop retrying based on pod status
+				if pod, ok := logger.(*Pod); ok && pod.shouldStopRetrying(opts.Path) {
+					slog.Debug("Stopping log retry after stream error - pod is terminating or deleted",
+						slogs.Container, opts.Info(),
+					)
+					return
+				}
+				slog.Debug("Log stream error, retrying",
+					slogs.Container, opts.Info(),
+				)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(delay):
+					if delay = backoffCtx.NextBackOff(); delay == backoff.Stop {
+						return
+					}
+				}
+				continue
+			case streamCanceled:
+				return
+			}
+
+			// Reset backoff and delay on successful connection
+			bf.Reset()
+			delay = logBackoffInitial
 		}
+
+		// Out of retries
+		out <- opts.ToErrLogItem(fmt.Errorf("failed to maintain log stream after %d retries", logRetryCount))
 	}()
+
 	go func() {
 		wg.Wait()
 		close(out)
@@ -376,50 +469,58 @@ func tailLogs(ctx context.Context, logger Logger, opts *LogOptions) LogChan {
 	return out
 }
 
-func readLogs(ctx context.Context, wg *sync.WaitGroup, stream io.ReadCloser, out chan<- *LogItem, opts *LogOptions) {
+func readLogs(ctx context.Context, stream io.ReadCloser, out chan<- *LogItem, opts *LogOptions) streamResult {
 	defer func() {
-		if err := stream.Close(); err != nil {
-			slog.Error("Fail to close stream",
+		if err := stream.Close(); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+			slog.Error("Failed to close stream",
 				slogs.Container, opts.Info(),
 				slogs.Error, err,
 			)
 		}
-		wg.Done()
 	}()
 
-	slog.Debug("Processing logs", slogs.Options, opts.Info())
 	r := bufio.NewReader(stream)
+
 	for {
-		var item *LogItem
-		if bytes, err := r.ReadBytes('\n'); err == nil {
-			item = opts.ToLogItem(tview.EscapeBytes(bytes))
-		} else {
-			if errors.Is(err, io.EOF) {
-				e := fmt.Errorf("stream closed %w for %s", err, opts.Info())
-				item = opts.ToErrLogItem(e)
-				slog.Warn("Log reader EOF",
+		bytes, err := r.ReadBytes('\n')
+		if err == nil {
+			item := opts.ToLogItem(tview.EscapeBytes(bytes))
+			select {
+			case <-ctx.Done():
+				return streamCanceled
+			case out <- item:
+			default:
+				// Avoid deadlock if consumer is too slow
+				slog.Warn("Dropping log line due to slow consumer",
 					slogs.Container, opts.Info(),
-					slogs.Error, e,
 				)
-			} else {
-				e := fmt.Errorf("stream canceled %w for %s", err, opts.Info())
-				item = opts.ToErrLogItem(e)
-				slog.Warn("Log stream canceled")
 			}
+			continue
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case out <- item:
-			if item.IsError {
-				return
+
+		if errors.Is(err, io.EOF) {
+			if len(bytes) > 0 {
+				// Emit trailing partial line before EOF
+				out <- opts.ToLogItem(tview.EscapeBytes(bytes))
 			}
+			slog.Debug("Log reader reached EOF", slogs.Container, opts.Info())
+			out <- opts.ToErrLogItem(fmt.Errorf("stream closed: %w for %s", err, opts.Info()))
+			return streamEOF
 		}
+
+		// Non-EOF error
+		slog.Debug("Log stream error, will retry connection",
+			slogs.Container, opts.Info(),
+			slogs.Error, fmt.Errorf("stream error: %w for %s", err, opts.Info()),
+		)
+		// Don't send stream errors to user - they will be retried
+		// Only final retry exhaustion message is shown
+		return streamError
 	}
 }
 
 // MetaFQN returns a fully qualified resource name.
-func MetaFQN(m metav1.ObjectMeta) string {
+func MetaFQN(m *metav1.ObjectMeta) string {
 	if m.Namespace == "" {
 		return m.Name
 	}
@@ -434,13 +535,14 @@ func (p *Pod) GetPodSpec(path string) (*v1.PodSpec, error) {
 		return nil, err
 	}
 	podSpec := pod.Spec
+
 	return &podSpec, nil
 }
 
 // SetImages sets container images.
 func (p *Pod) SetImages(ctx context.Context, path string, imageSpecs ImageSpecs) error {
 	ns, n := client.Namespaced(path)
-	auth, err := p.Client().CanI(ns, "v1/pod", n, client.PatchAccess)
+	auth, err := p.Client().CanI(ns, p.gvr, n, client.PatchAccess)
 	if err != nil {
 		return err
 	}
@@ -469,10 +571,11 @@ func (p *Pod) SetImages(ctx context.Context, path string, imageSpecs ImageSpecs)
 		jsonPatch,
 		metav1.PatchOptions{},
 	)
+
 	return err
 }
 
-func (p *Pod) isControlled(path string) (string, bool, error) {
+func (p *Pod) isControlled(path string) (fqn string, ok bool, err error) {
 	pod, err := p.GetInstance(path)
 	if err != nil {
 		return "", false, err
@@ -481,8 +584,20 @@ func (p *Pod) isControlled(path string) (string, bool, error) {
 	if len(references) > 0 {
 		return fmt.Sprintf("%s/%s", references[0].Kind, references[0].Name), true, nil
 	}
+
 	return "", false, nil
 }
+
+var toastPhases = sets.New(
+	render.PhaseCompleted,
+	render.PhasePending,
+	render.PhaseCrashLoop,
+	render.PhaseError,
+	render.PhaseImagePullBackOff,
+	render.PhaseContainerStatusUnknown,
+	render.PhaseEvicted,
+	render.PhaseOOMKilled,
+)
 
 func (p *Pod) Sanitize(ctx context.Context, ns string) (int, error) {
 	oo, err := p.Resource.List(ctx, ns)
@@ -501,22 +616,8 @@ func (p *Pod) Sanitize(ctx context.Context, ns string) (int, error) {
 		if err != nil {
 			continue
 		}
-		switch render.PodStatus(&pod) {
-		case render.PhaseCompleted:
-			fallthrough
-		case render.PhasePending:
-			fallthrough
-		case render.PhaseCrashLoop:
-			fallthrough
-		case render.PhaseError:
-			fallthrough
-		case render.PhaseImagePullBackOff:
-			fallthrough
-		case render.PhaseContainerStatusUnknown:
-			fallthrough
-		case render.PhaseEvicted:
-			fallthrough
-		case render.PhaseOOMKilled:
+
+		if toastPhases.Has(render.PodStatus(&pod)) {
 			// !!BOZO!! Might need to bump timeout otherwise rev limit if too many??
 			fqn := client.FQN(pod.Namespace, pod.Name)
 			slog.Debug("Sanitizing resource", slogs.FQN, fqn)
